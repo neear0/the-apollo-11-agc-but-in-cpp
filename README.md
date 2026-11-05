@@ -1,5 +1,7 @@
 # the apollo 11 agc but in c++
 
+![the dsky running luminary 099, V16N65 mission clock](docs/dsky.png)
+
 ## why the apollo 11 agc but in c++?
 
 because I'm bored and I can recycle this as a college class project
