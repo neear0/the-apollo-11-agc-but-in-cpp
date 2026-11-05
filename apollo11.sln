@@ -1,0 +1,43 @@
+
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.12.35707.178
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "apollo11", "apollo11\apollo11.vcxproj", "{5487109F-9B4D-4604-A14F-3D826DAB1655}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "celosui", "celosui\celosui.vcxproj", "{0B6A2C1E-7D43-4F5A-9E21-3C8D5F7A1B90}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "agc", "agc\agc.vcxproj", "{1B2637E7-FBAA-4F96-ABA4-44E7B0A92974}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "agc_check", "tools\agc_check\agc_check.vcxproj", "{8B131EB1-29E4-4BD1-93C1-4F7C33378F6F}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{5487109F-9B4D-4604-A14F-3D826DAB1655}.Debug|x64.ActiveCfg = Debug|x64
+		{5487109F-9B4D-4604-A14F-3D826DAB1655}.Debug|x64.Build.0 = Debug|x64
+		{5487109F-9B4D-4604-A14F-3D826DAB1655}.Release|x64.ActiveCfg = Release|x64
+		{5487109F-9B4D-4604-A14F-3D826DAB1655}.Release|x64.Build.0 = Release|x64
+		{0B6A2C1E-7D43-4F5A-9E21-3C8D5F7A1B90}.Debug|x64.ActiveCfg = Debug|x64
+		{0B6A2C1E-7D43-4F5A-9E21-3C8D5F7A1B90}.Debug|x64.Build.0 = Debug|x64
+		{0B6A2C1E-7D43-4F5A-9E21-3C8D5F7A1B90}.Release|x64.ActiveCfg = Release|x64
+		{0B6A2C1E-7D43-4F5A-9E21-3C8D5F7A1B90}.Release|x64.Build.0 = Release|x64
+		{1B2637E7-FBAA-4F96-ABA4-44E7B0A92974}.Debug|x64.ActiveCfg = Debug|x64
+		{1B2637E7-FBAA-4F96-ABA4-44E7B0A92974}.Debug|x64.Build.0 = Debug|x64
+		{1B2637E7-FBAA-4F96-ABA4-44E7B0A92974}.Release|x64.ActiveCfg = Release|x64
+		{1B2637E7-FBAA-4F96-ABA4-44E7B0A92974}.Release|x64.Build.0 = Release|x64
+		{8B131EB1-29E4-4BD1-93C1-4F7C33378F6F}.Debug|x64.ActiveCfg = Debug|x64
+		{8B131EB1-29E4-4BD1-93C1-4F7C33378F6F}.Debug|x64.Build.0 = Debug|x64
+		{8B131EB1-29E4-4BD1-93C1-4F7C33378F6F}.Release|x64.ActiveCfg = Release|x64
+		{8B131EB1-29E4-4BD1-93C1-4F7C33378F6F}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {88256CF4-D549-4BF5-B73C-7BBACAFF01B3}
+	EndGlobalSection
+EndGlobal

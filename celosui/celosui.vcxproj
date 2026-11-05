@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  CelosUI (Win32 + DirectX 11) as a static library, compiled in place from $(CelosUIDir) (see Directory.Build.props).
+  The same build as CelosUI's own cUI.vcxproj, without its main.cpp and its demo window (ui/render/main_window.cpp):
+  ui::render() calls render::main_window(), which apollo11 defines. ui/ is picked up by wildcard, so files added
+  to CelosUI come along without touching this project.
+-->
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{0B6A2C1E-7D43-4F5A-9E21-3C8D5F7A1B90}</ProjectGuid>
+    <RootNamespace>celosui</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="FreeType">
+    <!-- after Microsoft.Cpp.Default.props, which brings in CelosUIDir from Directory.Build.props. same version and hash as
+         CelosUI's cUI.vcxproj: its .deps\ copy is used when it's there, otherwise it's downloaded next to this project -->
+    <FreeTypeVersion>2-14-3</FreeTypeVersion>
+    <FreeTypeHash>3f624983444f9e9149707853a792dc5a897f3afc9f23a9b8669c03ac564779d1</FreeTypeHash>
+    <FreeTypeDir Condition="Exists('$(CelosUIDir).deps\freetype-VER-$(FreeTypeVersion)\include\ft2build.h')">$(CelosUIDir).deps\freetype-VER-$(FreeTypeVersion)\</FreeTypeDir>
+    <FreeTypeDir Condition="'$(FreeTypeDir)' == ''">$(MSBuildProjectDirectory)\.deps\freetype-VER-$(FreeTypeVersion)\</FreeTypeDir>
+    <FreeTypeIncludes>$(CelosUIDir)external\freetype_config;$(FreeTypeDir)include</FreeTypeIncludes>
+  </PropertyGroup>
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
+    <UseDebugLibraries>true</UseDebugLibraries>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Release'" Label="Configuration">
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup>
+    <OutDir>$(RepoRoot)obj\$(Platform)\$(Configuration)\$(ProjectName)\</OutDir>
+    <IntDir>$(RepoRoot)obj\$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <!-- CelosUI's own settings -->
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
+      <ConformanceMode>true</ConformanceMode>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>$(CelosUIDir)ui\pch.h</PrecompiledHeaderFile>
+      <ForcedIncludeFiles>$(CelosUIDir)ui\pch.h</ForcedIncludeFiles>
+      <!-- the shaders below are compiled into headers in $(IntDir)shaders\ -->
+      <AdditionalIncludeDirectories>$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <FxCompile>
+      <EntryPointName>main</EntryPointName>
+      <ShaderModel>4.0</ShaderModel>
+      <HeaderFileOutput>$(IntDir)shaders\%(Filename)_dxbc.h</HeaderFileOutput>
+      <VariableName>%(Filename)_dxbc</VariableName>
+      <ObjectFileOutput></ObjectFileOutput>
+    </FxCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
+    <ClCompile>
+      <PreprocessorDefinitions>_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+    <ClCompile>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
+  <ItemGroup Label="Shaders">
+    <FxCompile Include="$(CelosUIDir)external\imgui\dx11\imgui_impl_dx11_vs.hlsl">
+      <ShaderType>Vertex</ShaderType>
+    </FxCompile>
+    <FxCompile Include="$(CelosUIDir)external\imgui\dx11\imgui_impl_dx11_ps.hlsl;$(CelosUIDir)ui\shaders\*.hlsl">
+      <ShaderType>Pixel</ShaderType>
+    </FxCompile>
+    <None Include="$(CelosUIDir)ui\shaders\*.hlsli" />
+  </ItemGroup>
+
+  <ItemGroup Label="CelosUI">
+    <ClCompile Include="$(CelosUIDir)ui\**\*.cpp" Exclude="$(CelosUIDir)ui\glfw\**;$(CelosUIDir)ui\render\main_window.cpp;$(CelosUIDir)ui\pch.cpp;$(CelosUIDir)ui\resources\font_data.cpp;$(CelosUIDir)ui\resources\image_data.cpp" />
+    <ClCompile Include="$(CelosUIDir)ui\pch.cpp">
+      <PrecompiledHeader>Create</PrecompiledHeader>
+    </ClCompile>
+    <!-- big generated arrays and ImGui's sources don't use the pch -->
+    <ClCompile Include="$(CelosUIDir)ui\resources\font_data.cpp;$(CelosUIDir)ui\resources\image_data.cpp;$(CelosUIDir)external\imgui\imgui.cpp;$(CelosUIDir)external\imgui\imgui_draw.cpp;$(CelosUIDir)external\imgui\dx11\imgui_impl_dx11.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClInclude Include="$(CelosUIDir)ui\**\*.h" Exclude="$(CelosUIDir)ui\glfw\**" />
+  </ItemGroup>
+
+  <ItemGroup Label="FreeType">
+    <!-- only the modules CelosUI uses, the same list as its CMakeLists.txt -->
+    <ClCompile Include="$(FreeTypeDir)src\base\ftsystem.c;$(FreeTypeDir)src\base\ftinit.c;$(FreeTypeDir)src\base\ftdebug.c;$(FreeTypeDir)src\base\ftbase.c;$(FreeTypeDir)src\base\ftbbox.c;$(FreeTypeDir)src\base\ftglyph.c;$(FreeTypeDir)src\base\ftbitmap.c;$(FreeTypeDir)src\base\ftsynth.c;$(FreeTypeDir)src\base\ftmm.c;$(FreeTypeDir)src\gzip\ftgzip.c;$(FreeTypeDir)src\sfnt\sfnt.c;$(FreeTypeDir)src\truetype\truetype.c;$(FreeTypeDir)src\cff\cff.c;$(FreeTypeDir)src\psaux\psaux.c;$(FreeTypeDir)src\pshinter\pshinter.c;$(FreeTypeDir)src\psnames\psnames.c;$(FreeTypeDir)src\smooth\smooth.c;$(FreeTypeDir)src\autofit\autofit.c">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+      <AdditionalIncludeDirectories>$(FreeTypeIncludes);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>FT2_BUILD_LIBRARY;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="$(CelosUIDir)external\imgui\misc\freetype\imgui_freetype.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+      <AdditionalIncludeDirectories>$(FreeTypeIncludes);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemGroup>
+
+  <Target Name="CheckCelosUI" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(CelosUIDir)ui\ui.h')" Text="CelosUI not found at $(CelosUIDir). Clone it next to this repo or pass -p:CelosUIDir=path\to\CelosUI" />
+  </Target>
+  <Target Name="DownloadFreeType" AfterTargets="CheckCelosUI" BeforeTargets="PrepareForBuild" Condition="!Exists('$(FreeTypeDir)include\ft2build.h')">
+    <DownloadFile SourceUrl="https://github.com/freetype/freetype/archive/refs/tags/VER-$(FreeTypeVersion).zip" DestinationFolder="$(MSBuildProjectDirectory)\.deps" DestinationFileName="freetype-VER-$(FreeTypeVersion).zip" />
+    <VerifyFileHash File="$(MSBuildProjectDirectory)\.deps\freetype-VER-$(FreeTypeVersion).zip" Algorithm="SHA256" Hash="$(FreeTypeHash)" />
+    <Unzip SourceFiles="$(MSBuildProjectDirectory)\.deps\freetype-VER-$(FreeTypeVersion).zip" DestinationFolder="$(MSBuildProjectDirectory)\.deps" />
+    <Delete Files="$(MSBuildProjectDirectory)\.deps\freetype-VER-$(FreeTypeVersion).zip" />
+  </Target>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

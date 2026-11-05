@@ -1,0 +1,11 @@
+<Project>
+  <!-- imported by every project in the repo -->
+  <PropertyGroup>
+    <RepoRoot>$(MSBuildThisFileDirectory)</RepoRoot>
+
+    <!-- the CelosUI checkout the ui is built from, next to this repo unless set (msbuild -p:CelosUIDir=... or an environment variable) -->
+    <CelosUIDir Condition="'$(CelosUIDir)' == ''">$(MSBuildThisFileDirectory)..\CelosUI\</CelosUIDir>
+    <CelosUIDir>$([System.IO.Path]::GetFullPath('$(CelosUIDir)'))</CelosUIDir>
+    <CelosUIDir Condition="!HasTrailingSlash('$(CelosUIDir)')">$(CelosUIDir)\</CelosUIDir>
+  </PropertyGroup>
+</Project>
