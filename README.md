@@ -36,7 +36,7 @@ so it's an emulator, not a port. the autopilot in the rope is what flies the lun
 
 ## test
 
-- `agc_check test` from the repo root: both ropes against the 1969 ones (`tests/ropes`), the pad load against itself and the program, then luminary flying the lm: imu turn-on, V49, V48, hand flying, standby, and powered descent from P63's ignition to P64. about 10 seconds, exit code is the failures
+- `agc_check test` from the repo root: both ropes against the 1969 ones (`tests/ropes`), the pad load against itself and the program, then luminary flying the lm: imu turn-on, V49, V48, hand flying, standby, and powered descent from P63's ignition through the landing radar's updates, P64 and P65 to 25 m above the surface. about 10 seconds, exit code is the failures
 - ci runs it on every push, without the ui (no CelosUI needed)
 
 ## try
@@ -53,11 +53,11 @@ so it's an emulator, not a port. the autopilot in the rope is what flies the lun
 - `V48E` then `PRO` `PRO` `PRO` - autopilot data (N46, N47), then the descent engine's trim (N48): its gimbal driven to the stop for a minute and back, V50N48 when done
 - keyboard: digits, `v` `n` `+` `-` `c` `p` `r` `k`, enter
 
-powered descent, headless for now: `agc_check land Luminary099/MAIN.agc "V37E63E{0661}P{5025}E{5018}P{0618}{5018}eE {9962}P MMMMMMMM?"` starts 8 minutes before ignition in apollo 11's descent orbit (47 by 8.4 nmi), selects P63, skips the fine align, lets R60 turn to the ignition attitude, arms the engine and gives the go at V99. `{vvnn}` waits for verb vv noun nn. the braking phase takes it to P64
+powered descent, headless for now: `agc_check land Luminary099/MAIN.agc "V37E63E{0661}P{5025}E{5018}P{0618}{5018}eE {9962}P MMMMMWW V57E MMMMM?"` starts 8 minutes before ignition in apollo 11's descent orbit (47 by 8.4 nmi), selects P63, skips the fine align, lets R60 turn to the ignition attitude, arms the engine and gives the go at V99. `{vvnn}` waits for verb vv noun nn. the landing radar locks on at about 34000 ft, V57E lets its updates in (delta h settles, V16N68 shows it), P64 takes over at high gate, P65 brings it straight down
 
 ## not simulated
 
-the landing radar's data (it answers the computer without a lock, the ALT and VEL lights stay on, so navigation is the imu's alone and drifts by a couple of km), the ascent engine, the rendezvous radar, the aot, uplink. the moon is a point mass, the computer's lunar gravity isn't
+the surface itself: nothing stops the lunar module at it yet. the moon is a smooth sphere through the landing site (no terrain, no craters for the landing radar), and a point mass, where the computer's lunar gravity isn't. the ascent engine, the rendezvous radar, the aot, uplink
 
 the pad load is apollo 11's, from the grumman lm data book (`agc/src/lm/pad_load.cpp` says which table and what's left out). the computer powers on with erasable cleared, so the first fresh start is alarm 1107 (PROG lit), as on a real cold start. the state vectors, the landing site alignment and the clock are put where the ground's uplinks and the crew's alignment put them (`agc/src/lm/landing.cpp`)
 

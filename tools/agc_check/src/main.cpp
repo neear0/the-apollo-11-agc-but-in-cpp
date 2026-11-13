@@ -197,6 +197,10 @@ static void print_computer(const agc::c_computer& computer, const lm::c_lunar_mo
         computer.channel(012), computer.channel(014), computer.channel(030), computer.channel(031));
     std::println("  radar    channels 13 {:05o} 33 {:05o}  requests {}  antenna position {}", computer.channel(013), computer.channel(033),
         computer.radar_requests(), lm.landing_radar().antenna_position);
+    const lm::landing_radar_t& radar = lm.landing_radar();
+    std::println("  lr      {}{}  slant range {:8.1f} m  velocity x {:8.2f} y {:8.2f} z {:8.2f} m/s   above the surface {:8.1f} m",
+        radar.range_good ? "locked" : "no lock", radar.low_scale ? " (low scale)" : "", radar.slant_range,
+        radar.velocity.x, radar.velocity.y, radar.velocity.z, lm::length(lm.position()) - lm.surface_radius);
 }
 
 static std::optional<agc::dsky_key> key_for(char c)
@@ -514,18 +518,48 @@ static int test(const std::filesystem::path& root)
         flight->lm.run(flight->computer, 30.0);
         check(std::abs(engine.thrust - 43454.7) < 100.0, "at TIG + 26 s it throttles up to the stop (FLATOUT)");
 
-        // the braking phase, on the imu alone (no landing radar yet), to high gate where P64 takes over
+        // the braking phase: the landing radar locks on, the crew permits its updates (V57E), to high gate where P64
+        // takes over
         const int modreg = assembly->symbols.at("MODREG").value;
         double worst_trim = 0.0;
-        while (flight->computer.erasable(modreg) == 63 && mission_time() < tig + 800.0)
-        {
-            flight->lm.run(flight->computer, 1.0);
-            worst_trim = std::max({ worst_trim, std::abs(flight->lm.engine_trim().pitch), std::abs(flight->lm.engine_trim().roll) });
-        }
+        const auto fly_while = [&](const auto& condition, double limit) {
+            while (condition() && mission_time() < limit)
+            {
+                flight->lm.run(flight->computer, 0.5);
+                worst_trim = std::max({ worst_trim, std::abs(flight->lm.engine_trim().pitch), std::abs(flight->lm.engine_trim().roll) });
+            }
+        };
+        const lm::landing_radar_t& radar = flight->lm.landing_radar();
+        fly_while([&] { return !radar.range_good; }, tig + 600.0);
+        check(radar.range_good && radar.velocity_good, std::format("the landing radar locks on at {:.0f} m above the surface", above_site()));
+        fly(*flight, "W");
+        const agc::lights_t& lights = flight->computer.dsky().state().lights;
+        check(!lights.alt && !lights.vel, "ALT and VEL lights out: the computer has its data");
+        const double delta_h_before = std::abs(erasable("DELTAH", 2, 24));
+        fly(*flight, "V57E MM");
+        const double delta_h_after = std::abs(erasable("DELTAH", 2, 24));
+        check(delta_h_after < 0.25 * delta_h_before, std::format("V57E: its updates bring delta h from {:.0f} to {:.0f} m", delta_h_before, delta_h_after));
+
+        fly_while([&] { return flight->computer.erasable(modreg) == 63; }, tig + 800.0);
         check(flight->computer.erasable(modreg) == 64, std::format("braking phase flown to P64 in {:.0f} s", mission_time() - tig));
-        check(above_site() > 1000.0 && above_site() < 3500.0 && lm::length(flight->lm.velocity()) < 300.0,
+        check(above_site() > 1500.0 && above_site() < 3500.0 && lm::length(flight->lm.velocity()) < 250.0,
             std::format("high gate at {:.0f} m above the site, {:.0f} m/s", above_site(), lm::length(flight->lm.velocity())));
-        check(worst_trim / lm::degrees < 1.0, std::format("the trim gimbal holds the thrust through the centre of mass (at most {:.2f} deg)", worst_trim / lm::degrees));
+        check(std::abs(erasable("HCALC", 2, 24) - above_site()) < 30.0,
+            std::format("the computer's altitude {:.0f} m, the truth {:.0f} m", erasable("HCALC", 2, 24), above_site()));
+
+        // the approach, P64, to where P65 takes over and comes straight down
+        fly_while([&] { return flight->computer.erasable(modreg) != 65 && above_site() > 20.0; }, tig + 1000.0);
+        check(radar.antenna_position == 2, "the antenna swung to position 2 for the approach");
+        check(flight->computer.erasable(modreg) == 65, std::format("P65 at {:.0f} m above the surface, {:.0f} s after ignition", above_site(), mission_time() - tig));
+        fly_while([&] { return above_site() > 25.0; }, tig + 1000.0);
+        const lm::vec3_t over_surface = flight->lm.velocity() - lm::cross(flight->lm.moon_rotation, flight->lm.position());
+        const lm::vec3_t up = flight->lm.position() / lm::length(flight->lm.position());
+        const double descent_rate = lm::dot(over_surface, up);
+        const double drift = lm::length(over_surface - up * descent_rate);
+        check(std::abs(erasable("HCALC", 2, 24) - above_site()) < 3.0,
+            std::format("at {:.1f} m the computer's altitude is {:.1f} m", above_site(), erasable("HCALC", 2, 24)));
+        check(descent_rate < 0.0 && descent_rate > -1.5 && drift < 0.5, std::format("coming down at {:.2f} m/s, drifting {:.2f} m/s", -descent_rate, drift));
+        check(worst_trim / lm::degrees < 1.5, std::format("the trim gimbal holds the thrust through the centre of mass (at most {:.2f} deg)", worst_trim / lm::degrees));
         check(flight->computer.restarts() == 0 && no_new_alarms(*flight), std::format("no restarts or alarms on the way ({} restarts, alarms {:05o} {:05o})",
             flight->computer.restarts(), flight->computer.erasable(failreg->second.value + 1), flight->computer.erasable(failreg->second.value + 2)));
     }
