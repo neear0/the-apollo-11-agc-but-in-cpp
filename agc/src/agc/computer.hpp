@@ -18,6 +18,7 @@ namespace agc
     inline constexpr int counter_cdux = 032, counter_cduy = 033, counter_cduz = 034; // imu gimbal angles: outer, inner, middle
     inline constexpr int counter_pipax = 037, counter_pipay = 040, counter_pipaz = 041; // accelerometers, 1 cm/s a count
     inline constexpr int counter_q_rhc = 042, counter_p_rhc = 043, counter_r_rhc = 044; // the hand controller, pitch, yaw, roll
+    inline constexpr int counter_rnrad = 046;                                           // a radar reading
 
     // what a counter is told: up or down by one, in ones' complement (pinc, minc) or two's complement (pcdu, mcdu)
     enum class counter_pulse : std::uint8_t { pinc, minc, pcdu, mcdu };
@@ -51,6 +52,13 @@ namespace agc
         std::array<int, 3> take_gyro_pulses();                     // gyro torquing since the last call, signed, x y z
         std::array<int, 3> take_cdu_drive_pulses();                // imu coarse align drive since the last call, signed, x y z
         int take_thrust_pulses();                                  // descent engine throttle commands since the last call, signed
+
+        // the radars: each time the program sets channel 13's activity bit it wants a reading, of what channel 13's
+        // select bits said then (bit 3 the landing radar, bits 1-2 which of its velocity beams or altitude). the
+        // radar shifts it into RNRAD and the computer takes RADARUPT
+        int radar_requests() const;                                // since power-on
+        std::uint16_t radar_select() const;                        // at the last one
+        void radar_reading(std::uint16_t value);
 
         // the ground's side: a word of erasable memory loaded through the test connector, as the pad loads were
         void load_erasable(int address, std::uint16_t value);      // a linear erasable address, 0-3777
@@ -133,6 +141,8 @@ namespace agc
         std::array<int, 3> m_gyro_pulses{};
         std::array<int, 3> m_cdu_drive_pulses{};
         int m_thrust_pulses = 0;
+        int m_radar_requests = 0;
+        std::uint16_t m_radar_select = 0;
 
         c_dsky m_dsky;
     };

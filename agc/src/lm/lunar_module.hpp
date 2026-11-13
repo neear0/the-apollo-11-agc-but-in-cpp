@@ -50,6 +50,19 @@ namespace lm
         bool on = false;
     };
 
+    // the landing radar's antenna: position 1 for the braking phase, as the crew leaves it, until the computer commands
+    // position 2 (channel 12 bit 13, at P64) and it swings over, about 8 s (LRPOS2 starts looking for it after 7),
+    // and stays
+    // a reading takes 80 ms (INITREAD's sample midpoints are 4 cs apart): the computer asks (channel 13), the radar
+    // answers into RNRAD with RADARUPT. no lock on the surface yet: no data, its data good bits (channel 33) off
+    struct landing_radar_t
+    {
+        int antenna_position = 1;
+        double antenna_travel = 0.0; // s, swinging to position 2
+        int answered = 0;            // the computer's requests answered
+        double reading = -1.0;       // s into the one under way, -1 for none
+    };
+
     class c_lunar_module
     {
     public:
@@ -68,6 +81,7 @@ namespace lm
 
         // where it is, moon-centred and inertial, the axes the computer's (its basic reference coordinates)
         void set_orbit(const vec3_t& position, const vec3_t& velocity);
+        void set_attitude(const mat3_t& attitude);       // inertial to the vehicle's axes, and still
         const vec3_t& position() const;                  // m
         const vec3_t& velocity() const;                  // m/s
         double altitude() const;                         // above the moon's mean radius, m
@@ -80,9 +94,10 @@ namespace lm
         std::uint16_t jets() const;                      // the jets firing: channel 5's bits, then channel 6's shifted up 8
         const engine_trim_t& engine_trim() const;
         const descent_engine_t& descent_engine() const;
+        const landing_radar_t& landing_radar() const;
 
     private:
-        void set_switches(agc::c_computer& computer);
+        void set_switches(agc::c_computer& computer, double dt);
         void drive_trim(const agc::c_computer& computer, double dt);
         void run_engine(agc::c_computer& computer, double dt);
 
@@ -95,5 +110,6 @@ namespace lm
         std::uint16_t m_jets = 0;
         engine_trim_t m_engine_trim;
         descent_engine_t m_descent_engine;
+        landing_radar_t m_landing_radar;
     };
 }

@@ -361,6 +361,25 @@ int agc::c_computer::take_thrust_pulses()
     return std::exchange(m_thrust_pulses, 0);
 }
 
+int agc::c_computer::radar_requests() const
+{
+    return m_radar_requests;
+}
+
+std::uint16_t agc::c_computer::radar_select() const
+{
+    return m_radar_select;
+}
+
+// the reading done, the radar interface drops channel 13's activity bit itself: the program sets it again for the
+// next sample (RESAMPLE in P20-P25.agc ORs it back in, "RESET ACTIVITY BIT")
+void agc::c_computer::radar_reading(std::uint16_t value)
+{
+    m_erasable[0][counter_rnrad] = value & 077777;
+    m_channels[channel_13] &= static_cast<std::uint16_t>(~000010);
+    m_interrupt_requests[9] = true; // RADARUPT
+}
+
 void agc::c_computer::service_inputs()
 {
     // a key on the keypad: its code into channel 15 and KEYRUPT1. pro is a button held down, channel 32 bit 14 low
@@ -752,7 +771,15 @@ void agc::c_computer::write_channel(int number, int value)
 void agc::c_computer::cpu_write_channel(int number, int value)
 {
     if (number == channel_13)
+    {
         value &= 043777;
+        // the radar activity bit set: a reading wanted, of what the select bits say
+        if (!(m_channels[channel_13] & 000010) && (value & 000010))
+        {
+            ++m_radar_requests;
+            m_radar_select = static_cast<std::uint16_t>(value & 7);
+        }
+    }
     if (number == channel_33)
     {
         // writing it resets the alarm flip-flops in its top bits

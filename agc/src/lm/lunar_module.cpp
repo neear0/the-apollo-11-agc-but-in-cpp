@@ -85,6 +85,11 @@ static constexpr std::uint16_t engine_armed_signal = 000004, auto_throttle_signa
 static constexpr std::uint16_t engine_on = 010000, engine_off = 020000;
 // channel 31, active low
 static constexpr std::uint16_t attitude_hold_mode = 010000, auto_mode = 020000, out_of_detent = 040000;
+// channel 33, active low: the landing radar's antenna. channel 12: the computer commands it to position 2
+static constexpr std::uint16_t lr_position_1 = 000040, lr_position_2 = 000100;
+static constexpr std::uint16_t lr_position_2_command = 010000;
+// channel 13: a radar reading under way
+static constexpr std::uint16_t radar_activity = 000010;
 // channel 13: the autopilot asks for the hand controller's angles in the counters
 static constexpr std::uint16_t rhc_counter_enable = 000200, rhc_read = 000400;
 // channel 12: the descent engine's trim gimbal, by bell motion
@@ -119,7 +124,7 @@ void lm::c_lunar_module::step(agc::c_computer& computer, double dt)
     if (dt <= 0.0)
         return;
 
-    set_switches(computer);
+    set_switches(computer, dt);
     drive_trim(computer, dt);
     run_engine(computer, dt);
 
@@ -135,11 +140,13 @@ void lm::c_lunar_module::step(agc::c_computer& computer, double dt)
     }
 
     // the descent engine pushes up through the vehicle, its bell tilted by the trim gimbal: pitched, the thrust leans
-    // along z and turns the vehicle about y; rolled, along y and about z. the pivot below the centre of mass is the arm
+    // along z and turns the vehicle about y; rolled, along y and about z. the pivot below the centre of mass is the arm.
+    // which way is which is what the autopilot's trim control (GTS) needs to null the torque rather than feed it: the
+    // other way round, flying P63 it ran the gimbal into its stops and lost the attitude
     if (m_descent_engine.thrust > 0.0)
     {
         const double thrust = m_descent_engine.thrust;
-        const lm::vec3_t engine{ thrust, -thrust * std::sin(m_engine_trim.roll), thrust * std::sin(m_engine_trim.pitch) };
+        const lm::vec3_t engine{ thrust, thrust * std::sin(m_engine_trim.roll), -thrust * std::sin(m_engine_trim.pitch) };
         force += engine;
         torque += lm::cross(lm::vec3_t{ -pivot_below_cg_for(mass()), 0.0, 0.0 }, engine);
     }
@@ -203,6 +210,12 @@ const lm::vec3_t& lm::c_lunar_module::velocity() const
     return m_velocity;
 }
 
+void lm::c_lunar_module::set_attitude(const lm::mat3_t& attitude)
+{
+    m_attitude = attitude;
+    m_rates = {};
+}
+
 double lm::c_lunar_module::altitude() const
 {
     return lm::length(m_position) - lm::moon_radius;
@@ -216,6 +229,11 @@ double lm::c_lunar_module::mass() const
 const lm::descent_engine_t& lm::c_lunar_module::descent_engine() const
 {
     return m_descent_engine;
+}
+
+const lm::landing_radar_t& lm::c_lunar_module::landing_radar() const
+{
+    return m_landing_radar;
 }
 
 lm::c_imu& lm::c_lunar_module::imu()
@@ -266,7 +284,7 @@ static int hand_controller_counts(double deflection)
     return counts < 0 ? 077777 & ~(-counts) : counts;
 }
 
-void lm::c_lunar_module::set_switches(agc::c_computer& computer)
+void lm::c_lunar_module::set_switches(agc::c_computer& computer, double dt)
 {
     computer.set_input(030, lgc_has_control | engine_armed_signal | auto_throttle_signal,
         (guidance_pgns ? 0 : lgc_has_control) | (engine_armed ? 0 : engine_armed_signal) | (auto_throttle ? 0 : auto_throttle_signal));
@@ -280,6 +298,37 @@ void lm::c_lunar_module::set_switches(agc::c_computer& computer)
     if (deflected)
         channel31 &= static_cast<std::uint16_t>(~out_of_detent);
     computer.set_input(031, attitude_hold_mode | auto_mode | out_of_detent, channel31);
+
+    // the landing radar's antenna: swinging to position 2 while commanded, and staying there
+    static constexpr double antenna_swing = 8.0;
+    landing_radar_t& radar = m_landing_radar;
+    if (radar.antenna_position == 1 && (computer.channel(012) & lr_position_2_command))
+    {
+        radar.antenna_travel += dt;
+        if (radar.antenna_travel >= antenna_swing)
+            radar.antenna_position = 2;
+    }
+    computer.set_input(033, lr_position_1 | lr_position_2, radar.antenna_position == 1 ? lr_position_2 : lr_position_1);
+
+    // its readings: one wanted starts (over again, if one was under way), the activity bit dropped abandons it, and
+    // it's answered once it's taken its time. the rendezvous radar's (select bit 3 clear) aren't, there's none
+    static constexpr double reading_time = 0.080;
+    if (radar.answered != computer.radar_requests())
+    {
+        radar.answered = computer.radar_requests();
+        radar.reading = (computer.radar_select() & 4) ? 0.0 : -1.0;
+    }
+    else if (!(computer.channel(013) & radar_activity))
+        radar.reading = -1.0;
+    if (radar.reading >= 0.0)
+    {
+        radar.reading += dt;
+        if (radar.reading >= reading_time)
+        {
+            radar.reading = -1.0;
+            computer.radar_reading(0);
+        }
+    }
 
     // read into the counters while the autopilot has them enabled
     const std::uint16_t channel13 = computer.channel(013);
