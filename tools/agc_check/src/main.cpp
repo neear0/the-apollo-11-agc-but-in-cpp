@@ -1,6 +1,9 @@
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <format>
 #include <fstream>
+#include <memory>
 #include <optional>
 #include <print>
 #include <span>
@@ -205,41 +208,28 @@ static std::optional<agc::dsky_key> key_for(char c)
     }
 }
 
-// boots the program in the lunar module, waits, types the keys (V35E, N for noun, E enter, P pro, R rset, C clr, K
-// key rel) and shows the dsky and the spacecraft at the end. a space waits a second, W ten seconds, M a minute, S
-// holds pro for 3 seconds (standby and back), ? shows the state there. the crew's side in lowercase: i turns the imu
-// off or on, o h a set the mode control to off, attitude hold or auto, and the hand controller is held over for a
-// second by p q (pitch up, down), y z (yaw right, left), r l (roll right, left)
-static int run(const std::filesystem::path& main_file, std::string_view keys, double settle, std::string_view watch)
+// the program booted in the lunar module, with the pad load
+struct flight_t
 {
-    const auto assembly = yul::assemble(main_file);
-    if (!assembly)
+    explicit flight_t(const yul::assembly_t& assembly)
+        : computer(assembly.rope)
     {
-        for (const std::string& error : assembly.error())
-            std::println("{}", error);
-        return 1;
+        for (const std::string& name : lm::load_pad(computer, assembly))
+            std::println("no pad load symbol {}", name);
     }
 
-    // symbols to watch, comma separated, erasable ones only
-    for (std::size_t start = 0; start < watch.size(); )
-    {
-        std::size_t end = watch.find(',', start);
-        if (end == std::string_view::npos)
-            end = watch.size();
-        const std::string name(watch.substr(start, end - start));
-        if (const auto symbol = assembly->symbols.find(name); symbol != assembly->symbols.end() && symbol->second.value < 04000)
-            watched.emplace_back(name, symbol->second.value);
-        else
-            std::println("no erasable symbol {}", name);
-        start = end + 1;
-    }
-
-    agc::c_computer computer(assembly->rope);
-    for (const std::string& name : lm::load_pad(computer, *assembly))
-        std::println("no pad load symbol {}", name);
+    agc::c_computer computer;
     lm::c_lunar_module lm;
-    lm.run(computer, settle);
-    print_computer(computer, lm);
+};
+
+// types the keys into the dsky (V35E, N for noun, E enter, P pro, R rset, C clr, K key rel). a space waits a second,
+// W ten seconds, M a minute, S holds pro for 3 seconds (standby and back), ? shows the state there. the crew's side
+// in lowercase: i turns the imu off or on, o h a set the mode control to off, attitude hold or auto, and the hand
+// controller is held over for a second by p q (pitch up, down), y z (yaw right, left), r l (roll right, left)
+static void fly(flight_t& flight, std::string_view keys)
+{
+    agc::c_computer& computer = flight.computer;
+    lm::c_lunar_module& lm = flight.lm;
 
     const auto stick = [&](double lm::hand_controller_t::* axis, double deflection) {
         lm.hand_controller.*axis = deflection;
@@ -281,13 +271,150 @@ static int run(const std::filesystem::path& main_file, std::string_view keys, do
             lm.run(computer, 0.3);
         }
     }
+}
 
+// boots the program in the lunar module, waits, flies the keys and shows the dsky and the spacecraft at the end
+static int run(const std::filesystem::path& main_file, std::string_view keys, double settle, std::string_view watch)
+{
+    const auto assembly = yul::assemble(main_file);
+    if (!assembly)
+    {
+        for (const std::string& error : assembly.error())
+            std::println("{}", error);
+        return 1;
+    }
+
+    // symbols to watch, comma separated, erasable ones only
+    for (std::size_t start = 0; start < watch.size(); )
+    {
+        std::size_t end = watch.find(',', start);
+        if (end == std::string_view::npos)
+            end = watch.size();
+        const std::string name(watch.substr(start, end - start));
+        if (const auto symbol = assembly->symbols.find(name); symbol != assembly->symbols.end() && symbol->second.value < 04000)
+            watched.emplace_back(name, symbol->second.value);
+        else
+            std::println("no erasable symbol {}", name);
+        start = end + 1;
+    }
+
+    const auto flight = std::make_unique<flight_t>(*assembly);
+    flight->lm.run(flight->computer, settle);
+    print_computer(flight->computer, flight->lm);
+
+    fly(*flight, keys);
     if (!keys.empty())
     {
-        lm.run(computer, settle);
-        print_computer(computer, lm);
+        flight->lm.run(flight->computer, settle);
+        print_computer(flight->computer, flight->lm);
     }
     return 0;
+}
+
+// a two-digit dsky field as a number, -1 blank
+static int field_value(std::span<const std::int8_t> digits)
+{
+    int value = 0;
+    for (const std::int8_t digit : digits)
+    {
+        if (digit == agc::blank_digit)
+            return -1;
+        value = value * 10 + digit;
+    }
+    return value;
+}
+
+// what the readme says works, checked: both ropes against the 1969 ones, and Luminary flying the lunar module. each
+// flight starts from power-on and waits out the imu's turn-on (2 minutes) first. the exit code is the failures
+static int test(const std::filesystem::path& root)
+{
+    int failures = 0;
+    const auto check = [&](bool ok, std::string_view what) {
+        std::println("  {}  {}", ok ? "ok  " : "FAIL", what);
+        failures += !ok;
+    };
+
+    for (const std::string_view name : { "Luminary099", "Comanche055" })
+    {
+        std::println("{}", name);
+        const std::filesystem::path main_file = root / name / "MAIN.agc";
+        const std::filesystem::path rope = root / "tests" / "ropes" / std::format("{}.binsource", name);
+        check(assemble(main_file, rope) == 0, "assembles to the 1969 rope");
+    }
+
+    const auto assembly = yul::assemble(root / "Luminary099" / "MAIN.agc");
+    if (!assembly)
+    {
+        check(false, "Luminary099 assembles");
+        return failures;
+    }
+    const auto failreg = assembly->symbols.find("FAILREG");
+    if (failreg == assembly->symbols.end())
+    {
+        check(false, "FAILREG found");
+        return failures;
+    }
+
+    // a fresh start from zeroed erasable is alarm 1107 in the first of the three alarm registers: anything in the
+    // other two is an alarm since
+    const auto no_new_alarms = [&](const flight_t& flight) {
+        return flight.computer.erasable(failreg->second.value + 1) == 0 && flight.computer.erasable(failreg->second.value + 2) == 0;
+    };
+    const auto near = [](double radians, double degrees, double tolerance) {
+        return std::abs(radians / lm::degrees - degrees) <= tolerance;
+    };
+    const auto shows = [](const flight_t& flight, int verb, int noun) {
+        const agc::dsky_state_t& state = flight.computer.dsky().state();
+        return field_value(state.verb) == verb && field_value(state.noun) == noun;
+    };
+    // the autopilot holds attitude to its 5 degree deadband
+    static constexpr double deadband = 6.0;
+    const auto at_gimbals = [&](const flight_t& flight, double outer, double inner, double middle) {
+        const lm::gimbal_angles_t& gimbals = flight.lm.imu().gimbals();
+        return near(gimbals.outer, outer, deadband) && near(gimbals.inner, inner, deadband) && near(gimbals.middle, middle, deadband);
+    };
+    static constexpr std::string_view v49_to_30_20_0 = "V37E00E V49E V25E +03000E +02000E +00000E P P MM";
+
+    std::println("Luminary099 in the lunar module");
+    {
+        const auto flight = std::make_unique<flight_t>(*assembly);
+        fly(*flight, "MM");
+        check(!flight->computer.dsky().state().lights.no_att, "imu turned on: NO ATT out after 90 s");
+        check(at_gimbals(*flight, 0.0, 0.0, 0.0), "holding attitude after turn-on");
+        check(flight->computer.restarts() == 0 && no_new_alarms(*flight), "no restarts or alarms");
+    }
+    {
+        const auto flight = std::make_unique<flight_t>(*assembly);
+        fly(*flight, std::format("MM{}", v49_to_30_20_0));
+        check(at_gimbals(*flight, 30.0, 20.0, 0.0), "V49 maneuvers to gimbals 30 20 0");
+        check(flight->computer.restarts() == 0 && no_new_alarms(*flight), "no restarts or alarms");
+    }
+    {
+        const auto flight = std::make_unique<flight_t>(*assembly);
+        fly(*flight, "MMV48E P P P M W W W W");
+        const lm::engine_trim_t& trim = flight->lm.engine_trim();
+        check(shows(*flight, 50, 48), "V48 trims the descent engine to V50N48");
+        check(near(trim.pitch, 0.0, 0.05) && near(trim.roll, 0.0, 0.05), "trim gimbal back at centre");
+        check(no_new_alarms(*flight), "no alarms (1204 before PITTIME/ROLLTIME were pad loaded)");
+        fly(*flight, std::format("P {}", v49_to_30_20_0));
+        check(at_gimbals(*flight, 30.0, 20.0, 0.0) && !flight->computer.dsky().state().lights.opr_err, "V49 after V48 still maneuvers");
+    }
+    {
+        const auto flight = std::make_unique<flight_t>(*assembly);
+        fly(*flight, "MMhpp WW");
+        check(flight->lm.imu().gimbals().inner / lm::degrees > 20.0, "attitude hold: the hand controller pitches it");
+        check(std::abs(flight->lm.rates().y / lm::degrees) < 0.6, "and it stops when let go");
+    }
+    {
+        const auto flight = std::make_unique<flight_t>(*assembly);
+        fly(*flight, "MMV37E06E S");
+        check(flight->computer.standby() && flight->computer.dsky().state().lights.stby, "P06 and held pro: standby");
+        fly(*flight, "W S MM");
+        check(!flight->computer.standby() && shows(*flight, 37, -1), "held pro again: back, asking for a program");
+    }
+
+    std::println("{}", failures == 0 ? "all passed" : std::format("{} failed", failures));
+    return failures;
 }
 
 static void usage()
@@ -295,6 +422,7 @@ static void usage()
     std::println("usage:");
     std::println("  agc_check assemble <MAIN.agc> [--compare <rope.binsource>]");
     std::println("  agc_check run <MAIN.agc> [keys] [seconds to settle, default 3] [erasable symbols to show, comma separated]");
+    std::println("  agc_check test [repo root, default .]");
 }
 
 int main(int argc, char** argv)
@@ -314,6 +442,9 @@ int main(int argc, char** argv)
         const double settle = args.size() >= 4 ? std::stod(std::string(args[3])) : 3.0;
         return run(args[1], keys, settle, args.size() >= 5 ? args[4] : std::string_view());
     }
+
+    if (args.size() >= 1 && args[0] == "test")
+        return test(args.size() >= 2 ? std::filesystem::path(args[1]) : std::filesystem::path("."));
 
     usage();
     return 1;
