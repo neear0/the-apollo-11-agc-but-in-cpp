@@ -61,6 +61,12 @@ agc::c_computer& app::computer()
     return computer;
 }
 
+lm::c_lunar_module& app::lunar_module()
+{
+    static lm::c_lunar_module lunar_module;
+    return lunar_module;
+}
+
 const std::string& app::status()
 {
     app::computer(); // assembled first
@@ -74,13 +80,14 @@ int main()
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
     agc::c_computer& computer = app::computer();
+    lm::c_lunar_module& lunar_module = app::lunar_module();
 
     celosia::initialize::context();
     celosia::variables::title = { "apollo ", "11" };
     celosia::style::general::main_color = ImColor(124, 255, 128); // the display's green
     celosia::core::keyboard_nav = false; // the keyboard is the dsky's keypad instead, see view::keyboard()
 
-    if (!celosia::platform::create("apollo 11", ImVec2(0.f, 0.f), ImVec2(500.f, 620.f)))
+    if (!celosia::platform::create("apollo 11", ImVec2(0.f, 0.f), ImVec2(816.f, 620.f)))
         return 1;
 
     celosia::initialize::fonts(); // at the scale create() picked for the monitor
@@ -88,14 +95,15 @@ int main()
     celosia::resources::fonts::add("dsky_key", { celosia::resources::font_data::poppins_bold, celosia::resources::font_data::poppins_bold_size, 15.f });
     celosia::initialize::images();
 
-    // the computer keeps real time: each frame it runs for as long as the last one took (a stall isn't caught up on)
+    // the computer and the spacecraft keep real time: each frame they run for as long as the last one took (a stall
+    // isn't caught up on)
     auto last_frame = std::chrono::steady_clock::now();
     while (celosia::platform::poll())
     {
         const auto now = std::chrono::steady_clock::now();
         const double elapsed = std::chrono::duration<double>(now - last_frame).count();
         last_frame = now;
-        computer.run(std::min(elapsed, 0.1));
+        lunar_module.run(computer, std::min(elapsed, 0.1));
 
         celosia::ui::render();
         celosia::platform::bring_to_top();

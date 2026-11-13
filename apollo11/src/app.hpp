@@ -3,10 +3,12 @@
 #include <string>
 
 #include "agc/computer.hpp"
+#include "lm/lunar_module.hpp"
 
+// what the views draw: the computer running Luminary 099, in the lunar module
 namespace app
 {
-    // the computer the window shows, running Luminary 099 assembled from the repo's sources at startup (see main.cpp)
     agc::c_computer& computer();
-    const std::string& status(); // what's running, or why nothing is
+    lm::c_lunar_module& lunar_module();
+    const std::string& status(); // the program running, or why none is
 }

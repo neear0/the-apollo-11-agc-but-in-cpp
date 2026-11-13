@@ -123,19 +123,24 @@ static void draw_el_label(ImDrawList* drawlist, const ImRect& rect, const char* 
 }
 
 // prog, verb and noun: a label with two digits under it
-static void draw_field(ImDrawList* drawlist, ImVec2 pos, const char* label, std::span<const std::int8_t> digits, ImFont* font)
+static void draw_field(ImDrawList* drawlist, ImVec2 pos, const char* label, std::span<const std::int8_t> digits, ImFont* font, bool lit)
 {
     const float label_width = px(64.f);
-    draw_el_label(drawlist, ImRect(pos, pos + ImVec2(label_width, px(16.f))), label, true, font);
+    draw_el_label(drawlist, ImRect(pos, pos + ImVec2(label_width, px(16.f))), label, lit, font);
 
     const float digits_width = px(digit_width * 2.f + digit_gap);
     draw_digits(drawlist, pos + ImVec2(std::floor((label_width - digits_width) * 0.5f), px(20.f)), digits);
 }
 
-static void draw_display(ImDrawList* drawlist, const ImRect& rect, const agc::dsky_state_t& state)
+static void draw_display(ImDrawList* drawlist, const ImRect& rect, const agc::dsky_state_t& lit_state)
 {
     ImFont* font = celosia::resources::fonts::get("dsky_label");
     drawlist->AddRectFilled(rect.Min, rect.Max, el_background, px(6.f));
+
+    // in standby the whole panel is dark, labels and separators too
+    const bool on = !lit_state.display_off;
+    agc::dsky_state_t dark_state;
+    const agc::dsky_state_t& state = on ? lit_state : dark_state;
 
     const ImVec2 origin = rect.Min;
     const float width = rect.GetWidth();
@@ -144,21 +149,21 @@ static void draw_display(ImDrawList* drawlist, const ImRect& rect, const agc::ds
 
     draw_el_label(drawlist, ImRect(origin + ImVec2(padding, padding), origin + ImVec2(padding + px(64.f), padding + px(56.f))),
         "COMP\nACTY", state.comp_acty, font);
-    draw_field(drawlist, origin + ImVec2(right_column, padding), "PROG", state.prog, font);
+    draw_field(drawlist, origin + ImVec2(right_column, padding), "PROG", state.prog, font, on);
 
     // a flashing verb and noun are off a third of the time, about 1.5 times a second, as the dsky's own oscillator does it
     static constexpr std::array<std::int8_t, 2> blank = { agc::blank_digit, agc::blank_digit };
     const bool flashed_off = state.verb_noun_flash && std::fmod(celosia::ui::time, 0.64) > 0.43;
     const float verb_noun = padding + px(56.f + 12.f);
-    draw_field(drawlist, origin + ImVec2(padding, verb_noun), "VERB", flashed_off ? blank : state.verb, font);
-    draw_field(drawlist, origin + ImVec2(right_column, verb_noun), "NOUN", flashed_off ? blank : state.noun, font);
+    draw_field(drawlist, origin + ImVec2(padding, verb_noun), "VERB", flashed_off ? blank : state.verb, font, on);
+    draw_field(drawlist, origin + ImVec2(right_column, verb_noun), "NOUN", flashed_off ? blank : state.noun, font, on);
 
     // r1 to r3, each under a separator
     const float register_width = px(sign_width + digit_gap + digit_width * 5.f + digit_gap * 4.f);
     float y = verb_noun + px(56.f + 10.f);
     for (const agc::display_register_t& display_register : state.registers)
     {
-        drawlist->AddRectFilled(origin + ImVec2(padding, y), origin + ImVec2(width - padding, y + px(3.f)), el_lit);
+        drawlist->AddRectFilled(origin + ImVec2(padding, y), origin + ImVec2(width - padding, y + px(3.f)), on ? el_lit : el_unlit);
 
         const ImVec2 pos = origin + ImVec2(width - padding - register_width, y + px(8.f));
         draw_sign(drawlist, pos, display_register.sign);
@@ -207,8 +212,9 @@ static void draw_lights(ImDrawList* drawlist, const ImRect& rect, const agc::lig
     }
 }
 
-// a keypad key: core's button with the frames and glow of widgets::button, and its label in the given font
-static bool key_button(const char* label, const ImRect& bb, ImFont* font)
+// a keypad key: core's button with the frames and glow of widgets::button, and its label in the given font. held while
+// the mouse button is down on it
+static bool key_button(const char* label, const ImRect& bb, ImFont* font, bool* held_down = nullptr)
 {
     const ImGuiID id = celosia::core::id(label);
     celosia::core::layout(bb);
@@ -217,6 +223,8 @@ static bool key_button(const char* label, const ImRect& bb, ImFont* font)
 
     bool hovered = false, held = false;
     const bool pressed = celosia::core::button(bb, id, &hovered, &held);
+    if (held_down)
+        *held_down = held;
 
     const float rounding = static_cast<float>(celosia::style::general::rounding);
     const float glow = celosia::animations::set(celosia::animations::key("dsky_key_glow", id), hovered ? 1.f : 0.f);
@@ -259,50 +267,50 @@ static constexpr std::array<key_slot_t, 19> key_slots = { {
     { "KEY\nREL", agc::dsky_key::key_release, 6.f, 0.5f }, { "ENTR", agc::dsky_key::enter,   6.f, 1.5f },
 } };
 
-void view::dsky(agc::c_dsky& dsky, std::string_view status, double seconds)
+ImVec2 view::dsky_size()
+{
+    return px(468.f, 312.f + 16.f + 48.f * 3.f + 8.f * 2.f);
+}
+
+void view::dsky(agc::c_dsky& dsky, ImVec2 pos)
 {
     ImDrawList* drawlist = celosia::core::drawlist();
     const ImColor panel = celosia::style::themes::active.background_darker;
     const float rounding = static_cast<float>(celosia::style::general::rounding) * 2.f;
-    const float margin = px(16.f);
-    const float top = celosia::style::titlebar::height + margin;
+    const float right = pos.x + dsky_size().x;
 
     // lights on the left, the display on the right
-    const ImRect lights(ImVec2(margin, top), ImVec2(margin + px(224.f), top + px(312.f)));
+    const ImRect lights(pos, pos + px(224.f, 312.f));
     celosia::render::panel(drawlist, lights.Min, lights.Max, panel, rounding);
     draw_lights(drawlist, lights, dsky.state().lights);
 
-    const ImRect display(ImVec2(lights.Max.x + px(12.f), top), ImVec2(celosia::ui::size.x - margin, lights.Max.y));
+    const ImRect display(ImVec2(lights.Max.x + px(12.f), pos.y), ImVec2(right, lights.Max.y));
     celosia::render::panel(drawlist, display.Min, display.Max, panel, rounding);
     draw_display(drawlist, ImRect(display.Min + px(10.f, 10.f), display.Max - px(10.f, 10.f)), dsky.state());
 
-    // the keypad under them
+    // the keypad under them. pro is held for as long as the mouse holds it down (or the p key, see keyboard())
     ImFont* key_font = celosia::resources::fonts::get("dsky_key");
-    const ImVec2 keypad(margin, lights.Max.y + margin);
+    const ImVec2 keypad(pos.x, lights.Max.y + px(16.f));
     const ImVec2 key_size = px(60.f, 48.f);
     const ImVec2 key_step = key_size + px(8.f, 8.f);
 
+    bool proceed_held = false;
     for (const key_slot_t& slot : key_slots)
     {
         const ImVec2 min = keypad + ImVec2(key_step.x * slot.column, key_step.y * slot.row);
-        if (key_button(slot.label, ImRect(min, min + key_size), key_font))
+        bool held = false;
+        if (key_button(slot.label, ImRect(min, min + key_size), key_font, &held))
             dsky.press_key(slot.key);
+        if (slot.key == agc::dsky_key::proceed && held)
+        {
+            proceed_held = true;
+            if (celosia::input::mouse_clicked(celosia::input::left))
+                dsky.press_key(agc::dsky_key::proceed); // seen at once, not only when let go
+        }
     }
 
-    // what's running on the left, how long since power-on on the right
-    ImFont* small = celosia::resources::fonts::get("default_smaller");
-    const ImU32 text = dim(celosia::style::themes::active.text, 0.6f);
-    const std::string status_text(status);
-    const int whole_seconds = static_cast<int>(seconds);
-    const std::string clock = std::format("{:02}:{:02}:{:02}", whole_seconds / 3600, whole_seconds / 60 % 60, whole_seconds % 60);
-
-    const float bottom = keypad.y + key_step.y * 3.f + px(8.f);
-    const float line = celosia::render::text::size("A", nullptr, small).y;
-    const float y = std::floor(bottom + (celosia::ui::size.y - bottom - line) * 0.5f);
-    celosia::render::text::draw(drawlist, ImVec2(margin, y), text, status_text.c_str(), nullptr, small);
-
-    const ImVec2 clock_size = celosia::render::text::size(clock.c_str(), nullptr, small);
-    celosia::render::text::draw(drawlist, ImVec2(celosia::ui::size.x - margin - clock_size.x, y), text, clock.c_str(), nullptr, small);
+    proceed_held = proceed_held || (celosia::input::focused() && celosia::input::key_down('P'));
+    dsky.hold_proceed(proceed_held);
 }
 
 void view::keyboard(agc::c_dsky& dsky)

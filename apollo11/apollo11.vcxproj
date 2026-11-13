@@ -60,10 +60,12 @@
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\view\dsky_view.cpp" />
     <ClCompile Include="src\view\main_window.cpp" />
+    <ClCompile Include="src\view\spacecraft_view.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\app.hpp" />
     <ClInclude Include="src\view\dsky_view.hpp" />
+    <ClInclude Include="src\view\spacecraft_view.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\agc\agc.vcxproj">
