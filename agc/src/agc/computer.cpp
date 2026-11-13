@@ -343,7 +343,12 @@ void agc::c_computer::set_counter(int counter, int value)
 void agc::c_computer::set_input(int channel, std::uint16_t mask, std::uint16_t bits)
 {
     std::uint16_t& value = m_channels[static_cast<std::size_t>(channel & 0777)];
+    const std::uint16_t before = value;
     value = static_cast<std::uint16_t>((value & ~mask) | (bits & mask));
+
+    // channel 16, the mark buttons and the rate of descent switch: a bit coming on is KEYRUPT2 (MARKRUPT)
+    if ((channel & 0777) == 016 && (value & ~before & 0174))
+        m_interrupt_requests[6] = true;
 }
 
 std::array<int, 3> agc::c_computer::take_gyro_pulses()

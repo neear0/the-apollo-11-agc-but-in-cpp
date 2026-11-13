@@ -91,6 +91,9 @@ static constexpr std::uint16_t lr_velocity_good = 000200, lr_range_low_scale = 0
 static constexpr std::uint16_t lr_position_2_command = 010000;
 // channel 13: a radar reading under way
 static constexpr std::uint16_t radar_activity = 000010;
+// channel 16: the rate of descent switch, up and down, each click held this long and let go as long
+static constexpr std::uint16_t rod_up = 000040, rod_down = 000100;
+static constexpr double rod_click = 0.1; // s
 // channel 13: the autopilot asks for the hand controller's angles in the counters
 static constexpr std::uint16_t rhc_counter_enable = 000200, rhc_read = 000400;
 // channel 12: the descent engine's trim gimbal, by bell motion
@@ -446,6 +449,25 @@ void lm::c_lunar_module::set_switches(agc::c_computer& computer, double dt)
         channel31 &= static_cast<std::uint16_t>(~out_of_detent);
     computer.set_input(031, attitude_hold_mode | auto_mode | out_of_detent, channel31);
 
+    // the rate of descent switch: channel 16 bit 6 held for up, bit 7 for down, then let go before the next
+    if (m_rod_direction == 0 && m_rod_pending != 0)
+    {
+        m_rod_direction = m_rod_pending > 0 ? 1 : -1;
+        m_rod_pending -= m_rod_direction;
+        m_rod_clicked += m_rod_direction;
+        m_rod_switch = 0.0;
+    }
+    std::uint16_t channel16 = 0;
+    if (m_rod_direction != 0)
+    {
+        if (m_rod_switch < rod_click)
+            channel16 = m_rod_direction > 0 ? rod_up : rod_down;
+        m_rod_switch += dt;
+        if (m_rod_switch >= 2.0 * rod_click)
+            m_rod_direction = 0;
+    }
+    computer.set_input(016, rod_up | rod_down, channel16);
+
     run_radar(computer, dt);
 
     // read into the counters while the autopilot has them enabled
@@ -456,4 +478,14 @@ void lm::c_lunar_module::set_switches(agc::c_computer& computer, double dt)
         computer.set_counter(agc::counter_p_rhc, hand_controller_counts(hand_controller.yaw));
         computer.set_counter(agc::counter_r_rhc, hand_controller_counts(hand_controller.roll));
     }
+}
+
+void lm::c_lunar_module::click_rate_of_descent(int clicks)
+{
+    m_rod_pending += clicks;
+}
+
+int lm::c_lunar_module::rate_of_descent_clicks() const
+{
+    return m_rod_clicked;
 }

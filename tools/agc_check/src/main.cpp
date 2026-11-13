@@ -295,8 +295,8 @@ static std::string get_text(double seconds)
 // W ten seconds, M a minute, S holds pro for 3 seconds (standby and back), ? shows the state there. the crew's side
 // in lowercase: i turns the imu off or on, e arms the descent engine or disarms it, o h a set the mode control to
 // off, attitude hold or auto, and the hand controller is held over for a second by p q (pitch up, down), y z (yaw
-// right, left), r l (roll right, left), s pushes engine stop. {vvnn} waits, up to 20 minutes, for the dsky to show
-// verb vv noun nn, ! for the contact light
+// right, left), r l (roll right, left), s pushes engine stop, u d click the rate of descent switch up and down.
+// {vvnn} waits, up to 20 minutes, for the dsky to show verb vv noun nn, ! for the contact light
 static void fly(flight_t& flight, std::string_view keys)
 {
     agc::c_computer& computer = flight.computer;
@@ -376,6 +376,8 @@ static void fly(flight_t& flight, std::string_view keys)
         case 'i': lm.imu().operate = !lm.imu().operate; continue;
         case 'e': lm.engine_armed = !lm.engine_armed; continue;
         case 's': lm.engine_stop = true; continue;
+        case 'u': lm.click_rate_of_descent(1); lm.run(computer, 0.3); continue;
+        case 'd': lm.click_rate_of_descent(-1); lm.run(computer, 0.3); continue;
         case '!':
         {
             const double give_up = computer.time() + 1200.0;
@@ -630,6 +632,7 @@ static int test(const std::filesystem::path& root)
             std::format("high gate at {:.0f} m above the site, {:.0f} m/s", above_site(), lm::length(flight->lm.velocity())));
         check(std::abs(erasable("HCALC", 2, 24) - above_site()) < 30.0,
             std::format("the computer's altitude {:.0f} m, the truth {:.0f} m", erasable("HCALC", 2, 24), above_site()));
+        const auto by_hand = std::make_unique<flight_t>(*flight); // P66, below, from here
 
         // the approach, P64, to where P65 takes over and comes straight down
         fly_while([&] { return flight->computer.erasable(modreg) != 65 && above_site() > 20.0; }, tig + 1000.0);
@@ -679,6 +682,64 @@ static int test(const std::filesystem::path& root)
             std::format("V06N43: {:.2f} N {:.2f} E, the site {:.3f} N {:.3f} E", latitude, longitude, site_latitude, site_longitude));
         check(flight->computer.restarts() == 0 && no_new_alarms(*flight), std::format("no restarts or alarms on the way ({} restarts, alarms {:05o} {:05o})",
             flight->computer.restarts(), flight->computer.erasable(failreg->second.value + 1), flight->computer.erasable(failreg->second.value + 2)));
+
+        // the same landing from high gate, taken over at 500 ft as Armstrong did: attitude hold and a click of the rate
+        // of descent switch is P66. then the crew flies it, below
+        std::println("  by hand, P66 from 500 ft");
+        lm::c_lunar_module& lm = by_hand->lm;
+        agc::c_computer& computer = by_hand->computer;
+        const auto height = [&] { return lm::length(lm.position()) - lm::length(start.site); };
+        const auto over_surface_now = [&] { return lm.velocity() - lm::cross(lm.moon_rotation, lm.position()); };
+        const auto vertical_rate = [&] { return lm::dot(over_surface_now(), lm.position() / lm::length(lm.position())); };
+        while (height() > 152.4 && computer.erasable(modreg) == 64)
+            lm.run(computer, 0.1);
+        fly(*by_hand, "hd");
+        const auto drift_now = [&] { return lm::length(over_surface_now() - lm.position() / lm::length(lm.position()) * vertical_rate()); };
+        check(computer.erasable(modreg) == 66, std::format("ATT HOLD and the rate of descent switch: P66 at {:.0f} ft, {:.1f} m/s across", height() / 0.3048, drift_now()));
+
+        // the altitude rate P66 holds (VDGVERT, m/cs at 2^7): the one at the switch to it, a foot a second a click from there
+        const auto desired_rate = [&] {
+            const int vdgvert = assembly->symbols.at("VDGVERT").value;
+            const std::array<std::uint16_t, 2> words{ computer.erasable(vdgvert), computer.erasable(vdgvert + 1) };
+            return agc::from_scaled(words, 7) * 100.0;
+        };
+
+        // the crew: the hand controller tilts the thrust against the drift across the surface, the rate of descent
+        // switch brings the sink rate down as the surface comes up, engine stop after the contact light
+        double worst_drift = 0.0, next_click = 0.0;
+        while (!lm.touchdown().contact && computer.time() < uplinked_at + 2000.0)
+        {
+            const lm::vec3_t vertical = lm.position() / lm::length(lm.position());
+            const lm::vec3_t across = over_surface_now() - vertical * lm::dot(over_surface_now(), vertical);
+            lm::vec3_t push = across * -0.5;
+            if (lm::length(push) > 1.0)
+                push = push / lm::length(push) * 1.0;
+            const lm::vec3_t wanted = (vertical * 1.62 + push) / lm::length(vertical * 1.62 + push);
+            const lm::vec3_t thrust_axis = lm.attitude().rows[0];
+            const lm::vec3_t turn = lm.attitude() * lm::cross(thrust_axis, wanted); // about the vehicle's axes, rad
+            const double full = 20.0 * lm::degrees;
+            lm.hand_controller.pitch = std::clamp(turn.y * 0.6 / full, -1.0, 1.0);
+            lm.hand_controller.roll = std::clamp(turn.z * 0.6 / full, -1.0, 1.0);
+
+            const double sink = std::clamp(height() / 15.0, 0.9, 5.0);
+            if (computer.time() >= next_click && std::abs(desired_rate() + sink) > 0.2)
+            {
+                lm.click_rate_of_descent(desired_rate() + sink < 0.0 ? 1 : -1);
+                next_click = computer.time() + 0.5;
+            }
+            lm.run(computer, 0.1);
+            if (height() < 30.0)
+                worst_drift = std::max(worst_drift, lm::length(across));
+        }
+        lm.hand_controller = {};
+        check(std::abs(desired_rate() - vertical_rate()) < 0.15,
+            std::format("it comes down as the switch says: {:.2f} m/s asked, {:.2f} flown", -desired_rate(), -vertical_rate()));
+        fly(*by_hand, "   s W");
+        const lm::touchdown_t& manual = lm.touchdown();
+        check(manual.landed && manual.descent_rate < 1.0 && manual.drift < 0.5,
+            std::format("flown down by hand, {} clicks: touchdown at {:.2f} m/s down, {:.2f} m/s across ({:.2f} at most below 30 m), {:.0f} kg left",
+                lm.rate_of_descent_clicks(), manual.descent_rate, manual.drift, worst_drift, lm.descent_engine().propellant));
+        check(computer.restarts() == 0 && no_new_alarms(*by_hand), "no restarts or alarms");
     }
 
     std::println("{}", failures == 0 ? "all passed" : std::format("{} failed", failures));

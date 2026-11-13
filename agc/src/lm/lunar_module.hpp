@@ -101,6 +101,11 @@ namespace lm
         bool auto_throttle = true;                       // the throttle on the computer, not the crew's
         bool engine_stop = false;                        // the engine stop button pushed in: the engine off whatever the computer says
 
+        // the rate of descent switch, sprung to the middle: each click up (+1) is a foot a second less coming down in
+        // P66, each click down (-1) a foot a second more. clicks one after another, a tenth of a second each way
+        void click_rate_of_descent(int clicks);
+        int rate_of_descent_clicks() const;              // clicked, up less down, since power-on
+
         // the moon under it, as the landing radar sees it: a sphere through the landing site, turning
         double surface_radius = lm::moon_radius;         // m
         vec3_t moon_rotation;                            // its angular velocity, reference coordinates, rad/s
@@ -145,5 +150,9 @@ namespace lm
         touchdown_t m_touchdown;
         double m_time = 0.0;                             // s since power-on, as the vehicle has counted it
         double m_simulated_until = -1.0;                 // the computer's time the vehicle has been moved on to
+        int m_rod_pending = 0;                           // clicks still to make, up less down
+        int m_rod_clicked = 0;
+        int m_rod_direction = 0;                         // the click under way, held and then let go
+        double m_rod_switch = 0.0;                       // s into it
     };
 }
