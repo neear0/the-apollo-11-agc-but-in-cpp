@@ -24,7 +24,7 @@ so it's an emulator, not a port. the autopilot in the rope is what flies the lun
   - `agc::c_computer` - the cpu, timers, interrupts, i/o channels, and the restart monitor (night watchman, rupt lock, tc trap) and standby
   - `agc::c_dsky` - the display and keyboard
   - `lm::` - the lunar module: imu (gimbals, cdus, coarse align, gyro torquing, pipas), 16 rcs jets, rigid body attitude, its orbit around the moon, the descent engine (throttle, trim gimbal), the landing radar (antenna, beams, the readings as the computer decodes them), the gear on the surface (contact light, touchdown), the crew's switches and hand controller, apollo 11's pad load, and the start of the landing (the descent orbit, what the ground uplinked)
-- `apollo11/` - the app: luminary 099 flying the lunar module, fdai ball and switches on the left, dsky on the right, drawn with [CelosUI](https://github.com/neear0/celosUI)
+- `apollo11/` - the app: luminary 099 flying the lunar module, fdai ball and switches on the left, dsky in the middle, the descent on the right (its profile, altitude, rates, thrust, propellant, the contact light, engine arm and stop, time warp), drawn with [CelosUI](https://github.com/neear0/celosUI)
 - `tools/agc_check/` - console tool: `assemble <MAIN.agc> --compare <rope>`, `run <MAIN.agc> "V16N65E"`, `land` (as run, from the descent orbit), `symbols`, `test`
 - `Luminary099/`, `Comanche055/` - the 1969 source as Virtual AGC transcribed it, with a handful of transcription fixes so it assembles
 
@@ -51,9 +51,22 @@ so it's an emulator, not a port. the autopilot in the rope is what flies the lun
 - `V41N20E` and three angles - coarse align the imu, `V42E` and three angles - torque the gyros
 - `V37E06E` then hold `PRO` - standby, hold it again to come back
 - `V48E` then `PRO` `PRO` `PRO` - autopilot data (N46, N47), then the descent engine's trim (N48): its gimbal driven to the stop for a minute and back, V50N48 when done
+- START `POWER ON` - start over, as switched on
 - keyboard: digits, `v` `n` `+` `-` `c` `p` `r` `k`, enter
 
-the landing, headless for now: `agc_check land Luminary099/MAIN.agc "V37E63E{0661}P{5025}E{5018}P{0618}{5018}eE {9962}P MMMMMWW V57E !   s WV37E68E{0643}W?"` starts 8 minutes before ignition in apollo 11's descent orbit (47 by 8.4 nmi), selects P63, skips the fine align, lets R60 turn to the ignition attitude, arms the engine and gives the go at V99. `{vvnn}` waits for verb vv noun nn. the landing radar locks on at about 34000 ft, V57E lets its updates in (delta h settles, V16N68 shows it), P64 takes over at high gate, P65 brings it straight down. `!` waits for the contact light, `s` is engine stop (3 s later, as the crew did), V37E68E is P68: V06N43 shows where the computer thinks it landed
+the landing, in the app: START `LANDING` puts the lunar module in apollo 11's descent orbit, 8 minutes before ignition (47 by 8.4 nmi), the imu aligned and the uplink made. then, as the crew did:
+
+- `RSET` (the fresh start's PROG light), `V37E63E` - P63
+- `PRO` at V06N61, `ENTR` at V50N25 00014 (no fine align), `PRO` at V50N18: R60 turns it to the ignition attitude
+- `ENTR` at the second V50N18, ENG ARM to `DES`, `PRO` at V99N62: ignition. be done well before ignition, or it's alarm 1703 and ignition slips (and the landing with it)
+- once LR LOCK lights, `V57E` lets the landing radar's updates in. P64 at high gate, P65 to the surface
+- ENG STOP when CONTACT lights, then `V37E68E`: P68, V06N43 shows where the computer thinks it landed
+
+TIME runs it up to 10 times faster.
+
+![P64 at 160 ft, the landing radar locked, the site 0.07 nmi ahead](docs/landing.png)
+
+headless: `agc_check land Luminary099/MAIN.agc "V37E63E{0661}P{5025}E{5018}P{0618}{5018}eE {9962}P MMMMMWW V57E !   s WV37E68E{0643}W?"` is the same landing typed in: `{vvnn}` waits for verb vv noun nn, `e` arms the engine, `!` waits for the contact light, `s` is engine stop. the landing radar locks on at about 34000 ft, V16N68 shows delta h settling after V57E
 
 ## not simulated
 
