@@ -8,11 +8,25 @@
 
 // the lunar module just after undocking from the command module, with both stages and their propellant. the moments
 // of inertia are the ones the autopilot works out for itself after a fresh start (from LEMMASS, as 1JACC, 1JACCQ and
-// 1JACCR, the acceleration one jet gives): with them its jets stop the vehicle where it means them to
-static constexpr double mass = 15100.0;                             // kg
+// 1JACCR, the acceleration one jet gives): with them its jets stop the vehicle where it means them to. they stay put
+// as the descent propellant goes, for now
+static constexpr double initial_mass = 15100.0;                     // kg
+static constexpr double descent_propellant = 8200.0;                // kg, of the initial mass
 static constexpr lm::vec3_t inertia{ 17100.0, 15660.0, 19420.0 };  // kg m^2 about x, y, z
 static constexpr double jet_thrust = 445.0;                         // n, 100 pounds
 static constexpr double jet_arm = 1.68;                             // m, from each axis to the jet quads
+
+// the descent engine, as Luminary's throttle routines see it (CONTROLLED_CONSTANTS.agc): FEXTRA is 4096 pulses for
+// 51331 n, FMAX the throttle's stop, FMAXODD where the command saturates, THROTLAG the engine's lag, DPSVEX its
+// exhaust velocity. the minimum is the manual throttle's, 10% of the rated 46.7 kn. the gimbal's pivot is below the
+// centre of mass by what the autopilot reckons for this mass (L,PVT-CG, 5.42 ft)
+static constexpr double thrust_per_pulse = 51330.902 / 4096.0;      // n
+static constexpr double minimum_thrust = 4670.0;                    // n
+static constexpr double maximum_thrust = 43454.677;                 // n
+static constexpr int saturated_pulses = 3841;
+static constexpr double engine_lag = 0.2;                           // s
+static constexpr double exhaust_velocity = 2955.88868;              // m/s
+static constexpr double pivot_below_cg = 1.65;                      // m
 
 // a jet: which way it pushes the vehicle, and which way (and how many arms' worth) it turns it
 struct jet_t
@@ -40,7 +54,9 @@ static constexpr std::array<jet_t, 16> rcs_jets = { {
 } };
 
 // channel 30, active low
-static constexpr std::uint16_t lgc_has_control = 001000;
+static constexpr std::uint16_t engine_armed_signal = 000004, auto_throttle_signal = 000020, lgc_has_control = 001000;
+// channel 11: the descent engine commanded on and off
+static constexpr std::uint16_t engine_on = 010000, engine_off = 020000;
 // channel 31, active low
 static constexpr std::uint16_t attitude_hold_mode = 010000, auto_mode = 020000, out_of_detent = 040000;
 // channel 13: the autopilot asks for the hand controller's angles in the counters
@@ -49,7 +65,14 @@ static constexpr std::uint16_t rhc_counter_enable = 000200, rhc_read = 000400;
 static constexpr std::uint16_t trim_minus_pitch = 000400, trim_plus_pitch = 001000, trim_minus_roll = 002000, trim_plus_roll = 004000;
 static constexpr double trim_rate = 0.2 * lm::degrees, trim_limit = 6.0 * lm::degrees;
 
-lm::c_lunar_module::c_lunar_module() = default;
+// a circular orbit 110 km up, until set_orbit() says otherwise
+lm::c_lunar_module::c_lunar_module()
+    : m_dry_mass(initial_mass - descent_propellant)
+{
+    m_descent_engine.propellant = descent_propellant;
+    const double radius = lm::moon_radius + 110.0e3;
+    set_orbit({ radius, 0.0, 0.0 }, { 0.0, std::sqrt(lm::moon_mu / radius), 0.0 });
+}
 
 void lm::c_lunar_module::run(agc::c_computer& computer, double seconds)
 {
@@ -72,6 +95,7 @@ void lm::c_lunar_module::step(agc::c_computer& computer, double dt)
 
     set_switches(computer);
     drive_trim(computer, dt);
+    run_engine(computer, dt);
 
     // the jets the computer has on, the torque and thrust they give
     m_jets = static_cast<std::uint16_t>((computer.channel(005) & 0377) | ((computer.channel(006) & 0377) << 8));
@@ -84,6 +108,16 @@ void lm::c_lunar_module::step(agc::c_computer& computer, double dt)
         torque += rcs_jets[i].torque * (jet_thrust * jet_arm);
     }
 
+    // the descent engine pushes up through the vehicle, its bell tilted by the trim gimbal: pitched, the thrust leans
+    // along z and turns the vehicle about y; rolled, along y and about z. the pivot below the centre of mass is the arm
+    if (m_descent_engine.thrust > 0.0)
+    {
+        const double thrust = m_descent_engine.thrust;
+        const lm::vec3_t engine{ thrust, -thrust * std::sin(m_engine_trim.roll), thrust * std::sin(m_engine_trim.pitch) };
+        force += engine;
+        torque += lm::cross(lm::vec3_t{ -pivot_below_cg, 0.0, 0.0 }, engine);
+    }
+
     // euler's equations, the rates in the vehicle's axes
     const lm::vec3_t momentum{ inertia.x * m_rates.x, inertia.y * m_rates.y, inertia.z * m_rates.z };
     const lm::vec3_t net = torque - lm::cross(m_rates, momentum);
@@ -93,7 +127,68 @@ void lm::c_lunar_module::step(agc::c_computer& computer, double dt)
     if (rate > 1e-12)
         m_attitude = lm::orthonormalized(lm::frame_rotation(m_rates / rate, rate * dt) * m_attitude);
 
-    m_imu.step(computer, m_attitude, force / mass * dt, dt);
+    // the orbit: the moon's pull, which the pipas don't feel, and the thrust, which they do. semi-implicit euler, a
+    // millisecond at a time
+    const lm::vec3_t delta_v = force / mass() * dt;
+    const double r = lm::length(m_position);
+    m_velocity += m_position * (-lm::moon_mu / (r * r * r) * dt) + m_attitude.transposed() * delta_v;
+    m_position += m_velocity * dt;
+
+    m_imu.step(computer, m_attitude, delta_v, dt);
+}
+
+void lm::c_lunar_module::run_engine(agc::c_computer& computer, double dt)
+{
+    descent_engine_t& engine = m_descent_engine;
+
+    // the throttle command counts the computer's pulses while the throttle is on auto, and is gone when the engine
+    // isn't armed
+    const int pulses = computer.take_thrust_pulses();
+    if (!engine_armed)
+        engine.throttle_pulses = 0;
+    else if (auto_throttle)
+        engine.throttle_pulses = std::clamp(engine.throttle_pulses + pulses, 0, saturated_pulses);
+
+    const std::uint16_t channel11 = computer.channel(011);
+    engine.on = engine_armed && (channel11 & engine_on) && !(channel11 & engine_off) && engine.propellant > 0.0;
+
+    const double commanded = engine.on ? std::clamp(engine.throttle_pulses * thrust_per_pulse, minimum_thrust, maximum_thrust) : 0.0;
+    engine.thrust += (commanded - engine.thrust) * std::min(1.0, dt / engine_lag);
+    if (engine.thrust < 1.0 && !engine.on)
+        engine.thrust = 0.0;
+
+    engine.propellant = std::max(0.0, engine.propellant - engine.thrust / exhaust_velocity * dt);
+}
+
+void lm::c_lunar_module::set_orbit(const lm::vec3_t& position, const lm::vec3_t& velocity)
+{
+    m_position = position;
+    m_velocity = velocity;
+}
+
+const lm::vec3_t& lm::c_lunar_module::position() const
+{
+    return m_position;
+}
+
+const lm::vec3_t& lm::c_lunar_module::velocity() const
+{
+    return m_velocity;
+}
+
+double lm::c_lunar_module::altitude() const
+{
+    return lm::length(m_position) - lm::moon_radius;
+}
+
+double lm::c_lunar_module::mass() const
+{
+    return m_dry_mass + m_descent_engine.propellant;
+}
+
+const lm::descent_engine_t& lm::c_lunar_module::descent_engine() const
+{
+    return m_descent_engine;
 }
 
 lm::c_imu& lm::c_lunar_module::imu()
@@ -146,7 +241,8 @@ static int hand_controller_counts(double deflection)
 
 void lm::c_lunar_module::set_switches(agc::c_computer& computer)
 {
-    computer.set_input(030, lgc_has_control, guidance_pgns ? 0 : lgc_has_control);
+    computer.set_input(030, lgc_has_control | engine_armed_signal | auto_throttle_signal,
+        (guidance_pgns ? 0 : lgc_has_control) | (engine_armed ? 0 : engine_armed_signal) | (auto_throttle ? 0 : auto_throttle_signal));
 
     const bool deflected = std::abs(hand_controller.pitch) > 0.02 || std::abs(hand_controller.yaw) > 0.02 || std::abs(hand_controller.roll) > 0.02;
     std::uint16_t channel31 = attitude_hold_mode | auto_mode | out_of_detent;

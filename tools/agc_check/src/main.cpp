@@ -182,6 +182,10 @@ static void print_computer(const agc::c_computer& computer, const lm::c_lunar_mo
     std::println("  gimbals  outer {:8.3f}  inner {:8.3f}  middle {:8.3f}{}{}", gimbals.outer / lm::degrees, gimbals.inner / lm::degrees,
         gimbals.middle / lm::degrees, lm.imu().coarse_align() ? "  (coarse align)" : "", lm.imu().turn_on_request() ? "  (turn-on request)" : "");
     std::println("  trim     pitch {:8.3f}  roll  {:8.3f}", lm.engine_trim().pitch / lm::degrees, lm.engine_trim().roll / lm::degrees);
+    const lm::descent_engine_t& engine = lm.descent_engine();
+    std::println("  orbit    altitude {:9.1f} m  speed {:7.1f} m/s  mass {:7.1f} kg   engine{}{}  thrust {:7.0f} n  throttle {} pulses",
+        lm.altitude(), lm::length(lm.velocity()), lm.mass(), lm.engine_armed ? " armed" : "", engine.on ? " on" : " off",
+        engine.thrust, engine.throttle_pulses);
     std::println("  cdus     x     {:8.3f}  y     {:8.3f}  z      {:8.3f}", cdu_degrees(computer.erasable(agc::counter_cdux)),
         cdu_degrees(computer.erasable(agc::counter_cduy)), cdu_degrees(computer.erasable(agc::counter_cduz)));
     std::println("  rates    p     {:8.3f}  q     {:8.3f}  r      {:8.3f} deg/s   jets {:05o}  channels 12 {:05o} 14 {:05o} 30 {:05o} 31 {:05o}",
@@ -224,8 +228,9 @@ struct flight_t
 
 // types the keys into the dsky (V35E, N for noun, E enter, P pro, R rset, C clr, K key rel). a space waits a second,
 // W ten seconds, M a minute, S holds pro for 3 seconds (standby and back), ? shows the state there. the crew's side
-// in lowercase: i turns the imu off or on, o h a set the mode control to off, attitude hold or auto, and the hand
-// controller is held over for a second by p q (pitch up, down), y z (yaw right, left), r l (roll right, left)
+// in lowercase: i turns the imu off or on, e arms the descent engine or disarms it, o h a set the mode control to
+// off, attitude hold or auto, and the hand controller is held over for a second by p q (pitch up, down), y z (yaw
+// right, left), r l (roll right, left)
 static void fly(flight_t& flight, std::string_view keys)
 {
     agc::c_computer& computer = flight.computer;
@@ -246,6 +251,7 @@ static void fly(flight_t& flight, std::string_view keys)
         case 'M': lm.run(computer, 60.0); continue;
         case '?': print_computer(computer, lm); continue;
         case 'i': lm.imu().operate = !lm.imu().operate; continue;
+        case 'e': lm.engine_armed = !lm.engine_armed; continue;
         case 'o': lm.mode = lm::mode_control::off; continue;
         case 'h': lm.mode = lm::mode_control::attitude_hold; continue;
         case 'a': lm.mode = lm::mode_control::automatic; continue;
@@ -284,10 +290,11 @@ static int run(const std::filesystem::path& main_file, std::string_view keys, do
         return 1;
     }
 
-    // symbols to watch, comma separated, erasable ones only
+    // symbols to watch, erasable ones only: comma separated, or semicolon separated if any has a comma (L,PVT-CG)
+    const char separator = watch.contains(';') ? ';' : ',';
     for (std::size_t start = 0; start < watch.size(); )
     {
-        std::size_t end = watch.find(',', start);
+        std::size_t end = watch.find(separator, start);
         if (end == std::string_view::npos)
             end = watch.size();
         const std::string name(watch.substr(start, end - start));
@@ -367,8 +374,9 @@ static int test(const std::filesystem::path& root)
         const agc::dsky_state_t& state = flight.computer.dsky().state();
         return field_value(state.verb) == verb && field_value(state.noun) == noun;
     };
-    // the autopilot holds attitude to its 5 degree deadband
-    static constexpr double deadband = 6.0;
+    // the autopilot holds attitude to its 5 degree deadband, about each of the vehicle's axes: two of them off by that
+    // much put a gimbal 7.1 degrees out. after V49 it overshoots to the deadband's edge and drifts back
+    static constexpr double deadband = 7.5;
     const auto at_gimbals = [&](const flight_t& flight, double outer, double inner, double middle) {
         const lm::gimbal_angles_t& gimbals = flight.lm.imu().gimbals();
         return near(gimbals.outer, outer, deadband) && near(gimbals.inner, inner, deadband) && near(gimbals.middle, middle, deadband);
@@ -421,7 +429,7 @@ static void usage()
 {
     std::println("usage:");
     std::println("  agc_check assemble <MAIN.agc> [--compare <rope.binsource>]");
-    std::println("  agc_check run <MAIN.agc> [keys] [seconds to settle, default 3] [erasable symbols to show, comma separated]");
+    std::println("  agc_check run <MAIN.agc> [keys] [seconds to settle, default 3] [erasable symbols to show, comma or semicolon separated]");
     std::println("  agc_check test [repo root, default .]");
 }
 
