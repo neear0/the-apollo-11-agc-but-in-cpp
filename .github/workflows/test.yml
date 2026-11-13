@@ -1,0 +1,18 @@
+# builds agc_check (no ui, so no CelosUI needed) and runs its tests: both ropes against the 1969 ones, and Luminary
+# flying the lunar module
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: microsoft/setup-msbuild@v2
+      - name: build
+        run: msbuild tools/agc_check/agc_check.vcxproj -p:Configuration=Release -p:Platform=x64 -m -nologo -v:minimal
+      - name: test
+        run: ./bin/x64/Release/agc_check.exe test
