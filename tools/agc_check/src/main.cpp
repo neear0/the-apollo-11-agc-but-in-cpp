@@ -11,6 +11,7 @@
 
 #include "agc/computer.hpp"
 #include "lm/lunar_module.hpp"
+#include "lm/pad_load.hpp"
 #include "yul/assembler.hpp"
 
 // a rope transcribed from a printed listing, Virtual AGC's .binsource format: BANK=nn lines, then the bank's words in
@@ -177,6 +178,7 @@ static void print_computer(const agc::c_computer& computer, const lm::c_lunar_mo
     const lm::vec3_t& rates = lm.rates();
     std::println("  gimbals  outer {:8.3f}  inner {:8.3f}  middle {:8.3f}{}{}", gimbals.outer / lm::degrees, gimbals.inner / lm::degrees,
         gimbals.middle / lm::degrees, lm.imu().coarse_align() ? "  (coarse align)" : "", lm.imu().turn_on_request() ? "  (turn-on request)" : "");
+    std::println("  trim     pitch {:8.3f}  roll  {:8.3f}", lm.engine_trim().pitch / lm::degrees, lm.engine_trim().roll / lm::degrees);
     std::println("  cdus     x     {:8.3f}  y     {:8.3f}  z      {:8.3f}", cdu_degrees(computer.erasable(agc::counter_cdux)),
         cdu_degrees(computer.erasable(agc::counter_cduy)), cdu_degrees(computer.erasable(agc::counter_cduz)));
     std::println("  rates    p     {:8.3f}  q     {:8.3f}  r      {:8.3f} deg/s   jets {:05o}  channels 12 {:05o} 14 {:05o} 30 {:05o} 31 {:05o}",
@@ -233,6 +235,8 @@ static int run(const std::filesystem::path& main_file, std::string_view keys, do
     }
 
     agc::c_computer computer(assembly->rope);
+    for (const std::string& name : lm::load_pad(computer, *assembly))
+        std::println("no pad load symbol {}", name);
     lm::c_lunar_module lm;
     lm.run(computer, settle);
     print_computer(computer, lm);

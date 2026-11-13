@@ -51,6 +51,9 @@ namespace agc
         std::array<int, 3> take_gyro_pulses();                     // gyro torquing since the last call, signed, x y z
         std::array<int, 3> take_cdu_drive_pulses();                // imu coarse align drive since the last call, signed, x y z
 
+        // the ground's side: a word of erasable memory loaded through the test connector, as the pad loads were
+        void load_erasable(int address, std::uint16_t value);      // a linear erasable address, 0-3777
+
         // for debugging
         std::uint16_t erasable(int address) const; // a linear erasable address, 0-3777
         std::uint16_t channel(int number) const;

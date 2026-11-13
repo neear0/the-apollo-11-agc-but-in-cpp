@@ -297,6 +297,11 @@ std::uint16_t agc::c_computer::erasable(int address) const
     return m_erasable[static_cast<std::size_t>((address >> 8) & 7)][static_cast<std::size_t>(address & 0377)];
 }
 
+void agc::c_computer::load_erasable(int address, std::uint16_t value)
+{
+    m_erasable[static_cast<std::size_t>((address >> 8) & 7)][static_cast<std::size_t>(address & 0377)] = value & 077777;
+}
+
 std::uint16_t agc::c_computer::channel(int number) const
 {
     return m_channels[static_cast<std::size_t>(number & 0777)];

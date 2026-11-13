@@ -26,6 +26,14 @@ namespace lm
         double roll = 0.0;
     };
 
+    // the descent engine's trim gimbal, radians of bell motion: channel 12 drives it at 0.2 deg/s, to a stop at 6
+    // degrees each way
+    struct engine_trim_t
+    {
+        double pitch = 0.0;
+        double roll = 0.0;
+    };
+
     class c_lunar_module
     {
     public:
@@ -45,13 +53,16 @@ namespace lm
         const mat3_t& attitude() const;                  // inertial to the vehicle's axes
         const vec3_t& rates() const;                     // about the vehicle's axes, radians a second
         std::uint16_t jets() const;                      // the jets firing: channel 5's bits, then channel 6's shifted up 8
+        const engine_trim_t& engine_trim() const;
 
     private:
         void set_switches(agc::c_computer& computer);
+        void drive_trim(const agc::c_computer& computer, double dt);
 
         mat3_t m_attitude{};
         vec3_t m_rates{};
         c_imu m_imu;
         std::uint16_t m_jets = 0;
+        engine_trim_t m_engine_trim;
     };
 }

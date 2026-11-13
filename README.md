@@ -37,6 +37,7 @@ the assembler reproduces both original ropes word for word, checksums included. 
 - mode ATT HOLD and the arrows (pitch, roll) or `q` `e` (yaw) - fly it by hand, let go and it holds
 - `V41N20E` and three angles - coarse align the imu, `V42E` and three angles - torque the gyros
 - `V37E06E` then hold `PRO` - standby, hold it again to come back
+- `V48E` then `PRO` `PRO` `PRO` - autopilot data (N46, N47), then the descent engine's trim (N48): its gimbal driven to the stop for a minute and back, V50N48 when done
 - keyboard: digits, `v` `n` `+` `-` `c` `p` `r` `k`, enter
 
 ## not simulated

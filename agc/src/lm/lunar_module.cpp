@@ -45,6 +45,9 @@ static constexpr std::uint16_t lgc_has_control = 001000;
 static constexpr std::uint16_t attitude_hold_mode = 010000, auto_mode = 020000, out_of_detent = 040000;
 // channel 13: the autopilot asks for the hand controller's angles in the counters
 static constexpr std::uint16_t rhc_counter_enable = 000200, rhc_read = 000400;
+// channel 12: the descent engine's trim gimbal, by bell motion
+static constexpr std::uint16_t trim_minus_pitch = 000400, trim_plus_pitch = 001000, trim_minus_roll = 002000, trim_plus_roll = 004000;
+static constexpr double trim_rate = 0.2 * lm::degrees, trim_limit = 6.0 * lm::degrees;
 
 lm::c_lunar_module::c_lunar_module() = default;
 
@@ -68,6 +71,7 @@ void lm::c_lunar_module::step(agc::c_computer& computer, double dt)
         return;
 
     set_switches(computer);
+    drive_trim(computer, dt);
 
     // the jets the computer has on, the torque and thrust they give
     m_jets = static_cast<std::uint16_t>((computer.channel(005) & 0377) | ((computer.channel(006) & 0377) << 8));
@@ -115,6 +119,22 @@ const lm::vec3_t& lm::c_lunar_module::rates() const
 std::uint16_t lm::c_lunar_module::jets() const
 {
     return m_jets;
+}
+
+const lm::engine_trim_t& lm::c_lunar_module::engine_trim() const
+{
+    return m_engine_trim;
+}
+
+void lm::c_lunar_module::drive_trim(const agc::c_computer& computer, double dt)
+{
+    const std::uint16_t channel12 = computer.channel(012);
+    const auto drive = [&](double& angle, std::uint16_t plus, std::uint16_t minus) {
+        const int direction = ((channel12 & plus) ? 1 : 0) - ((channel12 & minus) ? 1 : 0);
+        angle = std::clamp(angle + direction * trim_rate * dt, -trim_limit, trim_limit);
+    };
+    drive(m_engine_trim.pitch, trim_plus_pitch, trim_minus_pitch);
+    drive(m_engine_trim.roll, trim_plus_roll, trim_minus_roll);
 }
 
 // a counter's value from -1 to 1 of the hand controller's travel, 42 counts at full deflection, in ones' complement

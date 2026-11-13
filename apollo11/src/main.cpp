@@ -6,8 +6,10 @@
 #include <chrono>
 #include <filesystem>
 #include <format>
+#include <memory>
 #include <print>
 
+#include "lm/pad_load.hpp"
 #include "ui/ui.h"
 #include "yul/assembler.hpp"
 
@@ -33,13 +35,14 @@ static std::filesystem::path find_program(std::string_view name)
     return {};
 }
 
-static agc::rope_t load_rope()
+// the computer with Luminary 099's rope and the pad load, or with an empty rope and why in program_status
+static std::unique_ptr<agc::c_computer> load_computer()
 {
     const std::filesystem::path main_file = find_program("Luminary099");
     if (main_file.empty())
     {
         program_status = "Luminary099/MAIN.agc not found";
-        return {};
+        return std::make_unique<agc::c_computer>(agc::rope_t{});
     }
 
     const auto assembly = yul::assemble(main_file);
@@ -48,17 +51,20 @@ static agc::rope_t load_rope()
         for (const std::string& error : assembly.error())
             std::println("{}", error);
         program_status = std::format("Luminary 099 didn't assemble: {} errors", assembly.error().size());
-        return {};
+        return std::make_unique<agc::c_computer>(agc::rope_t{});
     }
 
+    auto computer = std::make_unique<agc::c_computer>(assembly->rope);
+    for (const std::string& name : lm::load_pad(*computer, *assembly))
+        std::println("no pad load symbol {}", name);
     program_status = "Luminary 099";
-    return assembly->rope;
+    return computer;
 }
 
 agc::c_computer& app::computer()
 {
-    static agc::c_computer computer(load_rope());
-    return computer;
+    static const std::unique_ptr<agc::c_computer> computer = load_computer();
+    return *computer;
 }
 
 lm::c_lunar_module& app::lunar_module()
