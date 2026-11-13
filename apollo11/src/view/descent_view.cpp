@@ -102,44 +102,51 @@ void view::descent(lm::c_lunar_module& lunar_module, ImVec2 pos, float height)
     const lm::touchdown_t& touchdown = lunar_module.touchdown();
 
     // the profile, the readouts under it, the lights at the bottom
-    const ImRect top(pos, pos + ImVec2(width, px(312.f)));
+    const ImRect top(pos, pos + ImVec2(width, px(296.f)));
     celosia::render::panel(drawlist, top.Min, top.Max, panel, rounding);
     celosia::render::text::draw(drawlist, top.Min + px(12.f, 10.f), text, "DESCENT", nullptr, small);
     if (touchdown.landed)
     {
         // what the gear was built to take: 10 ft/s down, 4 ft/s across
-        const bool crashed = touchdown.descent_rate > 10.0 * feet || touchdown.drift > 4.0 * feet;
-        const std::string landed = std::format("{} AT {:.1f} FT/S", crashed ? "CRASHED" : "LANDED", touchdown.descent_rate / feet);
+        const bool sideways = touchdown.drift > 4.0 * feet;
+        const bool crashed = sideways || touchdown.descent_rate > 10.0 * feet;
+        const std::string landed = sideways ? std::format("CRASHED AT {:.1f} FT/S ACROSS", touchdown.drift / feet)
+                                            : std::format("{} AT {:.1f} FT/S", crashed ? "CRASHED" : "LANDED", touchdown.descent_rate / feet);
         celosia::render::text::draw(drawlist, ImVec2(top.Max.x - celosia::render::text::size(landed.c_str(), nullptr, small).x - px(12.f), top.Min.y + px(10.f)),
             crashed ? site_color : track_color, landed.c_str(), nullptr, small);
     }
 
     const float left = top.Min.x + px(12.f), right = top.Max.x - px(12.f);
-    draw_profile(drawlist, ImRect(ImVec2(left, top.Min.y + px(30.f)), ImVec2(right, top.Min.y + px(150.f))), landing);
+    draw_profile(drawlist, ImRect(ImVec2(left, top.Min.y + px(28.f)), ImVec2(right, top.Min.y + px(108.f))), landing);
 
-    // over the surface: the footpads' height, the rate up or down, the speed across it, all as on the moon turning under
-    // it. dashes without a landing, where the lunar module isn't anywhere in particular
+    // over the surface: the footpads' height, the rate up or down, the speed across it forward and to the right as the
+    // cross pointers showed it, how far the thrust is tilted off straight up, all as on the moon turning under it.
+    // dashes without a landing, where the lunar module isn't anywhere in particular
     const lm::descent_engine_t& engine = lunar_module.descent_engine();
-    std::array<std::string, 6> values;
+    std::array<std::string, 8> values;
     values.fill("-----");
     if (landing)
     {
         const lm::vec3_t over_surface = lunar_module.velocity() - lm::cross(lunar_module.moon_rotation, lunar_module.position());
         const lm::vec3_t up = lunar_module.position() / lm::length(lunar_module.position());
         const double rate = lm::dot(over_surface, up);
+        const lm::vec3_t across = over_surface - up * rate;
+        const lm::mat3_t& attitude = lunar_module.attitude();
         values[0] = std::format("{:.0f} ft", std::max(lunar_module.height(), 0.0) / feet);
         values[1] = std::format("{:+.1f} ft/s", rate / feet);
-        values[2] = std::format("{:.1f} ft/s", lm::length(over_surface - up * rate) / feet);
-        values[3] = std::format("{:.2f} nmi", app::profile_point().downrange / nautical_miles);
+        values[2] = std::format("{:+.1f} ft/s", lm::dot(across, attitude.rows[2]) / feet);
+        values[3] = std::format("{:+.1f} ft/s", lm::dot(across, attitude.rows[1]) / feet);
+        values[4] = std::format("{:.2f} nmi", app::profile_point().downrange / nautical_miles);
+        values[7] = std::format("{:.1f} deg", std::acos(std::clamp(lm::dot(attitude.rows[0], up), -1.0, 1.0)) / lm::degrees);
     }
-    values[4] = std::format("{:.0f}%", engine.thrust / full_thrust * 100.0);
-    values[5] = std::format("{:.1f}%", engine.propellant / lm::descent_propellant * 100.0);
+    values[5] = std::format("{:.0f}%", engine.thrust / full_thrust * 100.0);
+    values[6] = std::format("{:.1f}%", engine.propellant / lm::descent_propellant * 100.0);
 
-    static constexpr std::array<const char*, 6> labels = { "ALTITUDE", "ALT RATE", "HORIZ VEL", "TO SITE", "THRUST", "DES QTY" };
+    static constexpr std::array<const char*, 8> labels = { "ALTITUDE", "ALT RATE", "FWD VEL", "LAT VEL", "TO SITE", "THRUST", "DES QTY", "TILT" };
     const float column = (right - left) * 0.5f;
     for (std::size_t i = 0; i < labels.size(); ++i)
     {
-        const ImVec2 at(left + column * static_cast<float>(i % 2), top.Min.y + px(160.f) + px(34.f) * static_cast<float>(i / 2));
+        const ImVec2 at(left + column * static_cast<float>(i % 2), top.Min.y + px(116.f) + px(34.f) * static_cast<float>(i / 2));
         draw_readout(drawlist, at, labels[i], values[i]);
     }
 
@@ -159,15 +166,15 @@ void view::descent(lm::c_lunar_module& lunar_module, ImVec2 pos, float height)
     const float light_width = (right - left - gap * 2.f) / 3.f;
     for (std::size_t i = 0; i < lights.size(); ++i)
     {
-        const ImVec2 min(left + (light_width + gap) * static_cast<float>(i), top.Min.y + px(270.f));
-        view::draw_light(drawlist, ImRect(min, min + ImVec2(light_width, px(30.f))), lights[i].label, lights[i].lit, lights[i].color, small);
+        const ImVec2 min(left + (light_width + gap) * static_cast<float>(i), top.Min.y + px(256.f));
+        view::draw_light(drawlist, ImRect(min, min + ImVec2(light_width, px(28.f))), lights[i].label, lights[i].lit, lights[i].color, small);
     }
 
     // the switches under it
     const ImRect controls(ImVec2(pos.x, top.Max.y + px(16.f)), ImVec2(pos.x + width, pos.y + height));
     celosia::render::panel(drawlist, controls.Min, controls.Max, panel, rounding);
 
-    const float label_width = px(78.f), row_height = px(28.f), row_gap = px(9.f);
+    const float label_width = px(78.f), row_height = px(26.f), row_gap = px(7.f);
     float y = controls.Min.y + px(12.f);
     const auto row = [&](const char* label) {
         const ImRect whole(ImVec2(left, y), ImVec2(right, y + row_height));
@@ -191,6 +198,14 @@ void view::descent(lm::c_lunar_module& lunar_module, ImVec2 pos, float height)
     int warp = static_cast<int>(std::find(warps.begin(), warps.end(), app::time_warp) - warps.begin());
     if (view::switch_row("##time_warp", row("TIME"), warp_items, 4, &warp))
         app::time_warp = warps[static_cast<std::size_t>(warp)];
+
+    // the rate of descent switch, sprung back to the middle: a click is a foot a second, in P66 (w and s too)
+    const ImRect rod = row("ROD");
+    const float rod_half = (rod.GetWidth() - gap) * 0.5f;
+    if (view::button("UP##rod_up", ImRect(rod.Min, rod.Min + ImVec2(rod_half, rod.GetHeight())), small))
+        lunar_module.click_rate_of_descent(1);
+    if (view::button("DOWN##rod_down", ImRect(ImVec2(rod.Max.x - rod_half, rod.Min.y), rod.Max), small))
+        lunar_module.click_rate_of_descent(-1);
 
     const ImRect buttons = row("START");
     const float half = (buttons.GetWidth() - gap) * 0.5f;

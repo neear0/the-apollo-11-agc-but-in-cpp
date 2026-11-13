@@ -295,12 +295,20 @@ void view::hand_controller(lm::c_lunar_module& lunar_module)
     lm::hand_controller_t stick;
     if (celosia::input::focused())
     {
-        const auto axis = [](int negative, int positive) {
-            return (celosia::input::key_down(positive) ? 1.0 : 0.0) - (celosia::input::key_down(negative) ? 1.0 : 0.0);
+        // a third of the way over, for flying it down in P66; all the way with shift
+        const double travel = celosia::input::key_down(celosia::keys::shift) ? 1.0 : 1.0 / 3.0;
+        const auto axis = [travel](int negative, int positive) {
+            return ((celosia::input::key_down(positive) ? 1.0 : 0.0) - (celosia::input::key_down(negative) ? 1.0 : 0.0)) * travel;
         };
         stick.pitch = axis(celosia::keys::up, celosia::keys::down); // back on the stick, the down arrow, is nose up
         stick.roll = axis(celosia::keys::left, celosia::keys::right);
         stick.yaw = axis('Q', 'E');
+
+        // the rate of descent switch: w up (coming down slower), s down
+        if (celosia::input::key_pressed('W', false))
+            lunar_module.click_rate_of_descent(1);
+        if (celosia::input::key_pressed('S', false))
+            lunar_module.click_rate_of_descent(-1);
     }
     lunar_module.hand_controller = stick;
 }
