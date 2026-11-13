@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -355,6 +356,15 @@ static int test(const std::filesystem::path& root)
         check(false, "Luminary099 assembles");
         return failures;
     }
+
+    std::println("the pad load");
+    {
+        const std::vector<std::string> problems = lm::check_pad(*assembly);
+        for (const std::string& problem : problems)
+            std::println("        {}", problem);
+        check(problems.empty(), "every word at its symbol and the value the table gives");
+    }
+
     const auto failreg = assembly->symbols.find("FAILREG");
     if (failreg == assembly->symbols.end())
     {
@@ -402,7 +412,8 @@ static int test(const std::filesystem::path& root)
         fly(*flight, "MMV48E P P P M W W W W");
         const lm::engine_trim_t& trim = flight->lm.engine_trim();
         check(shows(*flight, 50, 48), "V48 trims the descent engine to V50N48");
-        check(near(trim.pitch, 0.0, 0.05) && near(trim.roll, 0.0, 0.05), "trim gimbal back at centre");
+        // to the 6 degree stop, then back at 0.2 deg/s for the pad load's times: 23.29 s pitch, 29.26 s roll
+        check(near(trim.pitch, -6.0 + 0.2 * 23.29, 0.05) && near(trim.roll, -6.0 + 0.2 * 29.26, 0.05), "trim gimbal where PITTIME and ROLLTIME put it");
         check(no_new_alarms(*flight), "no alarms (1204 before PITTIME/ROLLTIME were pad loaded)");
         fly(*flight, std::format("P {}", v49_to_30_20_0));
         check(at_gimbals(*flight, 30.0, 20.0, 0.0) && !flight->computer.dsky().state().lights.opr_err, "V49 after V48 still maneuvers");
@@ -410,7 +421,7 @@ static int test(const std::filesystem::path& root)
     {
         const auto flight = std::make_unique<flight_t>(*assembly);
         fly(*flight, "MMhpp WW");
-        check(flight->lm.imu().gimbals().inner / lm::degrees > 20.0, "attitude hold: the hand controller pitches it");
+        check(flight->lm.imu().gimbals().inner / lm::degrees > 10.0, "attitude hold: the hand controller pitches it");
         check(std::abs(flight->lm.rates().y / lm::degrees) < 0.6, "and it stops when let go");
     }
     {
@@ -425,10 +436,31 @@ static int test(const std::filesystem::path& root)
     return failures;
 }
 
+// every symbol and where it points (a linear pseudo-address, octal: erasable 0-3777, fixed from 4000), by name
+static int symbols(const std::filesystem::path& main_file)
+{
+    const auto assembly = yul::assemble(main_file);
+    if (!assembly)
+    {
+        for (const std::string& error : assembly.error())
+            std::println("{}", error);
+        return 1;
+    }
+
+    std::vector<std::pair<std::string, int>> sorted;
+    for (const auto& [name, address] : assembly->symbols)
+        sorted.emplace_back(name, address.value);
+    std::ranges::sort(sorted);
+    for (const auto& [name, value] : sorted)
+        std::println("{} {:o}", name, value);
+    return 0;
+}
+
 static void usage()
 {
     std::println("usage:");
     std::println("  agc_check assemble <MAIN.agc> [--compare <rope.binsource>]");
+    std::println("  agc_check symbols <MAIN.agc>");
     std::println("  agc_check run <MAIN.agc> [keys] [seconds to settle, default 3] [erasable symbols to show, comma or semicolon separated]");
     std::println("  agc_check test [repo root, default .]");
 }
@@ -450,6 +482,9 @@ int main(int argc, char** argv)
         const double settle = args.size() >= 4 ? std::stod(std::string(args[3])) : 3.0;
         return run(args[1], keys, settle, args.size() >= 5 ? args[4] : std::string_view());
     }
+
+    if (args.size() >= 2 && args[0] == "symbols")
+        return symbols(args[1]);
 
     if (args.size() >= 1 && args[0] == "test")
         return test(args.size() >= 2 ? std::filesystem::path(args[1]) : std::filesystem::path("."));

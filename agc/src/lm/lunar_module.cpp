@@ -1,32 +1,58 @@
 #include "lm/lunar_module.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <numbers>
 
 
 #include "agc/computer.hpp"
 
-// the lunar module just after undocking from the command module, with both stages and their propellant. the moments
-// of inertia are the ones the autopilot works out for itself after a fresh start (from LEMMASS, as 1JACC, 1JACCQ and
-// 1JACCR, the acceleration one jet gives): with them its jets stop the vehicle where it means them to. they stay put
-// as the descent propellant goes, for now
-static constexpr double initial_mass = 15100.0;                     // kg
-static constexpr double descent_propellant = 8200.0;                // kg, of the initial mass
-static constexpr lm::vec3_t inertia{ 17100.0, 15660.0, 19420.0 };  // kg m^2 about x, y, z
+// Apollo 11's lunar module at descent orbit insertion, the mass the pad load gives (MASS, 33664 lb), with the descent
+// stage's propellant (18184 lb loaded)
+static constexpr double initial_mass = 15269.7;                     // kg
+static constexpr double descent_propellant = 8248.0;                // kg, of the initial mass
 static constexpr double jet_thrust = 445.0;                         // n, 100 pounds
 static constexpr double jet_arm = 1.68;                             // m, from each axis to the jet quads
 
+// the autopilot's own curve fits of the vehicle against its mass, descent stage on (AOSTASK_AND_AOSJOB.agc): A/(mass
+// + C) + B, the mass scaled at 2^16 kg. they give one jet's angular acceleration about p, q and r (1JACC, 1JACCQ,
+// 1JACCR, scaled at pi/4 rad/s^2), and the gimbal pivot's distance below the centre of mass (L,PVT-CG, at 8 ft). the
+// moments of inertia here are what make one jet's torque give that acceleration: the jets turn the vehicle as the
+// autopilot expects, as the propellant goes
+struct curve_fit_t
+{
+    double a, b, c;
+    constexpr double at(double mass) const { return a / (mass / 65536.0 + c) + b; }
+};
+static constexpr std::array<curve_fit_t, 3> jet_acceleration_fits = { {
+    { 0.0059347674, 0.002989, 0.008721 },
+    { 0.0014979264, 0.018791, -0.068163 },
+    { 0.0010451889, 0.021345, -0.066027 },
+} };
+static constexpr curve_fit_t pivot_below_cg_fit{ 0.0410511917, 0.155044, -0.025233 };
+
+static lm::vec3_t inertia_for(double mass)
+{
+    const double torque = jet_thrust * jet_arm;
+    const auto inertia = [&](std::size_t axis) { return torque / (jet_acceleration_fits[axis].at(mass) * std::numbers::pi / 4.0); };
+    return { inertia(0), inertia(1), inertia(2) };
+}
+
+static double pivot_below_cg_for(double mass)
+{
+    return pivot_below_cg_fit.at(mass) * 8.0 * 0.3048;
+}
+
 // the descent engine, as Luminary's throttle routines see it (CONTROLLED_CONSTANTS.agc): FEXTRA is 4096 pulses for
 // 51331 n, FMAX the throttle's stop, FMAXODD where the command saturates, THROTLAG the engine's lag, DPSVEX its
-// exhaust velocity. the minimum is the manual throttle's, 10% of the rated 46.7 kn. the gimbal's pivot is below the
-// centre of mass by what the autopilot reckons for this mass (L,PVT-CG, 5.42 ft)
+// exhaust velocity. the minimum is the manual throttle's, 10% of the rated 46.7 kn
 static constexpr double thrust_per_pulse = 51330.902 / 4096.0;      // n
 static constexpr double minimum_thrust = 4670.0;                    // n
 static constexpr double maximum_thrust = 43454.677;                 // n
 static constexpr int saturated_pulses = 3841;
 static constexpr double engine_lag = 0.2;                           // s
 static constexpr double exhaust_velocity = 2955.88868;              // m/s
-static constexpr double pivot_below_cg = 1.65;                      // m
 
 // a jet: which way it pushes the vehicle, and which way (and how many arms' worth) it turns it
 struct jet_t
@@ -115,10 +141,11 @@ void lm::c_lunar_module::step(agc::c_computer& computer, double dt)
         const double thrust = m_descent_engine.thrust;
         const lm::vec3_t engine{ thrust, -thrust * std::sin(m_engine_trim.roll), thrust * std::sin(m_engine_trim.pitch) };
         force += engine;
-        torque += lm::cross(lm::vec3_t{ -pivot_below_cg, 0.0, 0.0 }, engine);
+        torque += lm::cross(lm::vec3_t{ -pivot_below_cg_for(mass()), 0.0, 0.0 }, engine);
     }
 
     // euler's equations, the rates in the vehicle's axes
+    const lm::vec3_t inertia = inertia_for(mass());
     const lm::vec3_t momentum{ inertia.x * m_rates.x, inertia.y * m_rates.y, inertia.z * m_rates.z };
     const lm::vec3_t net = torque - lm::cross(m_rates, momentum);
     m_rates += lm::vec3_t{ net.x / inertia.x, net.y / inertia.y, net.z / inertia.z } * dt;
