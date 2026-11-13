@@ -80,3 +80,7 @@ comanche 055, the command module's program, assembles word for word but doesn't 
 
 - the agc source: MIT instrumentation lab, 1969, public domain, transcribed by the [Virtual AGC](https://www.ibiblio.org/apollo/) project, via [chrislgarry/apollo-11](https://github.com/chrislgarry/apollo-11)
 - yaYUL and yaAGC from Virtual AGC were the reference for how the assembler and cpu behave
+
+## license
+
+the c++ is MIT (`LICENSE`). `Luminary099/` and `Comanche055/` are the MIT instrumentation lab's, public domain
