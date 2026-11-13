@@ -160,11 +160,16 @@ void lm::c_lunar_module::step(agc::c_computer& computer, double dt)
         torque += lm::cross(lm::vec3_t{ -pivot_below_cg_for(mass()), 0.0, 0.0 }, engine);
     }
 
-    // euler's equations, the rates in the vehicle's axes
-    const lm::vec3_t inertia = inertia_for(mass());
-    const lm::vec3_t momentum{ inertia.x * m_rates.x, inertia.y * m_rates.y, inertia.z * m_rates.z };
-    const lm::vec3_t net = torque - lm::cross(m_rates, momentum);
-    m_rates += lm::vec3_t{ net.x / inertia.x, net.y / inertia.y, net.z / inertia.z } * dt;
+    // euler's equations, the rates in the vehicle's axes. landed, it turns with the moon, whatever the jets do
+    if (m_touchdown.landed)
+        m_rates = m_attitude * moon_rotation;
+    else
+    {
+        const lm::vec3_t inertia = inertia_for(mass());
+        const lm::vec3_t momentum{ inertia.x * m_rates.x, inertia.y * m_rates.y, inertia.z * m_rates.z };
+        const lm::vec3_t net = torque - lm::cross(m_rates, momentum);
+        m_rates += lm::vec3_t{ net.x / inertia.x, net.y / inertia.y, net.z / inertia.z } * dt;
+    }
 
     const double rate = lm::length(m_rates);
     if (rate > 1e-12)
@@ -172,12 +177,58 @@ void lm::c_lunar_module::step(agc::c_computer& computer, double dt)
 
     // the orbit: the moon's pull, which the pipas don't feel, and the thrust, which they do. semi-implicit euler, a
     // millisecond at a time
-    const lm::vec3_t delta_v = force / mass() * dt;
+    lm::vec3_t delta_v = force / mass() * dt;
     const double r = lm::length(m_position);
-    m_velocity += m_position * (-lm::moon_mu / (r * r * r) * dt) + m_attitude.transposed() * delta_v;
-    m_position += m_velocity * dt;
+    const lm::vec3_t gravity = m_position * (-lm::moon_mu / (r * r * r));
+    if (!m_touchdown.landed)
+    {
+        m_velocity += gravity * dt + m_attitude.transposed() * delta_v;
+        m_position += m_velocity * dt;
+    }
+    touch_down(-gravity, dt, delta_v);
 
+    m_time += dt;
     m_imu.step(computer, m_attitude, delta_v, dt);
+}
+
+// the gear: the probes 67.2 in below the footpads, the footpads (a guess) 3.5 m below the centre of mass
+static constexpr double probe_length = 67.2 * 0.0254;                     // m
+static constexpr double pads_below_cg = 3.5;                              // m
+
+double lm::c_lunar_module::height() const
+{
+    return lm::length(m_position) - surface_radius - pads_below_cg;
+}
+
+// the contact light as the probes touch, the footpads taking it, and from then sitting on the turning moon: what the
+// pipas feel is the surface holding it up (support, the specific force, against gravity)
+void lm::c_lunar_module::touch_down(const lm::vec3_t& support, double dt, lm::vec3_t& delta_v)
+{
+    touchdown_t& touchdown = m_touchdown;
+    const lm::vec3_t vertical = m_position / lm::length(m_position);
+    if (!touchdown.landed)
+    {
+        touchdown.contact = touchdown.contact || height() <= probe_length;
+        if (height() > 0.0)
+            return;
+
+        const lm::vec3_t over_surface = m_velocity - lm::cross(moon_rotation, m_position);
+        touchdown.landed = touchdown.contact = true;
+        touchdown.time = m_time;
+        touchdown.descent_rate = -lm::dot(over_surface, vertical);
+        touchdown.drift = lm::length(over_surface - vertical * lm::dot(over_surface, vertical));
+        m_position = vertical * (surface_radius + pads_below_cg);
+        touchdown.position = m_position;
+    }
+
+    m_position += lm::cross(moon_rotation, m_position) * dt;
+    m_velocity = lm::cross(moon_rotation, m_position);
+    delta_v = m_attitude * support * dt;
+}
+
+const lm::touchdown_t& lm::c_lunar_module::touchdown() const
+{
+    return m_touchdown;
 }
 
 void lm::c_lunar_module::run_engine(agc::c_computer& computer, double dt)
@@ -193,7 +244,7 @@ void lm::c_lunar_module::run_engine(agc::c_computer& computer, double dt)
         engine.throttle_pulses = std::clamp(engine.throttle_pulses + pulses, 0, saturated_pulses);
 
     const std::uint16_t channel11 = computer.channel(011);
-    engine.on = engine_armed && (channel11 & engine_on) && !(channel11 & engine_off) && engine.propellant > 0.0;
+    engine.on = engine_armed && !engine_stop && (channel11 & engine_on) && !(channel11 & engine_off) && engine.propellant > 0.0;
 
     const double commanded = engine.on ? std::clamp(engine.throttle_pulses * thrust_per_pulse, minimum_thrust, maximum_thrust) : 0.0;
     engine.thrust += (commanded - engine.thrust) * std::min(1.0, dt / engine_lag);

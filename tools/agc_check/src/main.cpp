@@ -169,6 +169,9 @@ static double cdu_degrees(std::uint16_t counter)
 // erasable words to show with the state, by symbol: name and linear address
 static std::vector<std::pair<std::string, int>> watched;
 
+// flying the landing: where the computer's navigation keeps its position (RN, reference coordinates, m at 2^29)
+static int navigation_position = -1;
+
 static void print_computer(const agc::c_computer& computer, const lm::c_lunar_module& lm)
 {
     print_dsky(computer.dsky().state(), computer.time());
@@ -201,6 +204,39 @@ static void print_computer(const agc::c_computer& computer, const lm::c_lunar_mo
     std::println("  lr      {}{}  slant range {:8.1f} m  velocity x {:8.2f} y {:8.2f} z {:8.2f} m/s   above the surface {:8.1f} m",
         radar.range_good ? "locked" : "no lock", radar.low_scale ? " (low scale)" : "", radar.slant_range,
         radar.velocity.x, radar.velocity.y, radar.velocity.z, lm::length(lm.position()) - lm.surface_radius);
+    if (navigation_position >= 0)
+    {
+        // RN and VN after it: m at 2^29, m/cs at 2^7
+        const auto vector = [&](int address, int scale) {
+            std::array<std::uint16_t, 6> words{};
+            for (std::size_t i = 0; i < words.size(); ++i)
+                words[i] = computer.erasable(address + static_cast<int>(i));
+            return lm::vec3_t{ agc::from_scaled(std::span(words.data(), 2), scale), agc::from_scaled(std::span(words.data() + 2, 2), scale),
+                agc::from_scaled(std::span(words.data() + 4, 2), scale) };
+        };
+        // they're as of PIPTIME, the last time the pipas were read: the truth wound back to then (the acceleration
+        // over that second or two left out, a few metres)
+        const std::array<std::uint16_t, 2> piptime{ computer.erasable(navigation_position + 12), computer.erasable(navigation_position + 13) };
+        const double clock = (computer.erasable(024) * 16384.0 + computer.erasable(025)) / 100.0;
+        const double lag = clock - agc::from_scaled(std::span(piptime.data(), 2), 28) / 100.0;
+        const double r = lm::length(lm.position());
+        const lm::vec3_t acceleration = lm.position() * (-lm::moon_mu / (r * r * r)) +
+            lm.attitude().transposed() * lm::vec3_t{ lm.descent_engine().thrust / lm.mass(), 0.0, 0.0 };
+        const lm::vec3_t error = vector(navigation_position, 29) - (lm.position() - lm.velocity() * lag);
+        const lm::vec3_t velocity_error = vector(navigation_position + 6, 7) * 100.0 - (lm.velocity() - acceleration * lag);
+        const lm::vec3_t up = lm.position() / lm::length(lm.position());
+        const lm::vec3_t downrange = (lm.velocity() - up * lm::dot(lm.velocity(), up)) / lm::length(lm.velocity() - up * lm::dot(lm.velocity(), up));
+        const lm::vec3_t across = lm::cross(up, downrange);
+        std::println("  nav     position off by {:.0f} m up, {:.0f} downrange, {:.0f} across; velocity by {:.2f} {:.2f} {:.2f} m/s (as of {:.1f} s ago)",
+            lm::dot(error, up), lm::dot(error, downrange), lm::dot(error, across),
+            lm::dot(velocity_error, up), lm::dot(velocity_error, downrange), lm::dot(velocity_error, across), lag);
+    }
+    const lm::touchdown_t& touchdown = lm.touchdown();
+    if (touchdown.landed)
+        std::println("  landed  {:.1f} s ago, at {:.2f} m/s down, {:.2f} m/s across{}", computer.time() - touchdown.time,
+            touchdown.descent_rate, touchdown.drift, lm.engine_stop ? "  (engine stop)" : "");
+    else
+        std::println("  gear    footpads {:.1f} m up{}{}", lm.height(), touchdown.contact ? "  CONTACT" : "", lm.engine_stop ? "  (engine stop)" : "");
 }
 
 static std::optional<agc::dsky_key> key_for(char c)
@@ -259,7 +295,8 @@ static std::string get_text(double seconds)
 // W ten seconds, M a minute, S holds pro for 3 seconds (standby and back), ? shows the state there. the crew's side
 // in lowercase: i turns the imu off or on, e arms the descent engine or disarms it, o h a set the mode control to
 // off, attitude hold or auto, and the hand controller is held over for a second by p q (pitch up, down), y z (yaw
-// right, left), r l (roll right, left). {vvnn} waits, up to 20 minutes, for the dsky to show verb vv noun nn
+// right, left), r l (roll right, left), s pushes engine stop. {vvnn} waits, up to 20 minutes, for the dsky to show
+// verb vv noun nn, ! for the contact light
 static void fly(flight_t& flight, std::string_view keys)
 {
     agc::c_computer& computer = flight.computer;
@@ -292,6 +329,44 @@ static void fly(flight_t& flight, std::string_view keys)
             continue;
         }
 
+        // # (flying the landing): 20 s, the computer's navigation (RN, VN as of PIPTIME) against the truth at the time
+        // PIPTIME says, the truth kept a millisecond at a time (the computer's clock and this one go together)
+        if (c == '#' && navigation_position >= 0)
+        {
+            const auto vector = [&](int address, int scale) {
+                std::array<std::uint16_t, 6> words{};
+                for (std::size_t i = 0; i < words.size(); ++i)
+                    words[i] = computer.erasable(address + static_cast<int>(i));
+                return lm::vec3_t{ agc::from_scaled(std::span(words.data(), 2), scale), agc::from_scaled(std::span(words.data() + 2, 2), scale),
+                    agc::from_scaled(std::span(words.data() + 4, 2), scale) };
+            };
+            const auto seconds = [&](int high) { return (computer.erasable(high) * 16384.0 + computer.erasable(high + 1)) / 100.0; };
+            struct sample_t { double time; lm::vec3_t position, velocity; };
+            std::vector<sample_t> history;
+            const double end = computer.time() + 20.0;
+            double piptime = seconds(navigation_position + 12);
+            while (computer.time() < end)
+            {
+                lm.run(computer, 0.001);
+                history.push_back({ computer.time(), lm.position(), lm.velocity() });
+                const double now_piptime = seconds(navigation_position + 12);
+                if (now_piptime == piptime)
+                    continue;
+                piptime = now_piptime;
+                lm.run(computer, 0.3); // SERVICER's update of RN and VN done
+                const double read_at = piptime - (seconds(024) - computer.time());
+                const auto sample = std::ranges::min_element(history, {}, [&](const sample_t& s) { return std::abs(s.time - read_at); });
+                const lm::vec3_t error = vector(navigation_position, 29) - sample->position;
+                const lm::vec3_t velocity_error = vector(navigation_position + 6, 7) * 100.0 - sample->velocity;
+                const lm::vec3_t up = sample->position / lm::length(sample->position);
+                const lm::vec3_t along = sample->velocity - up * lm::dot(sample->velocity, up);
+                const lm::vec3_t unit_along = along / lm::length(along);
+                std::println("  pipas read at {:.2f}: RN off by {:.1f} m up, {:.1f} m along; VN by {:.3f} m/s up, {:.3f} along", read_at,
+                    lm::dot(error, up), lm::dot(error, unit_along), lm::dot(velocity_error, up), lm::dot(velocity_error, unit_along));
+            }
+            continue;
+        }
+
         switch (c)
         {
         case ' ': lm.run(computer, 1.0); continue;
@@ -300,6 +375,14 @@ static void fly(flight_t& flight, std::string_view keys)
         case '?': print_computer(computer, lm); continue;
         case 'i': lm.imu().operate = !lm.imu().operate; continue;
         case 'e': lm.engine_armed = !lm.engine_armed; continue;
+        case 's': lm.engine_stop = true; continue;
+        case '!':
+        {
+            const double give_up = computer.time() + 1200.0;
+            while (!lm.touchdown().contact && computer.time() < give_up)
+                lm.run(computer, 0.01);
+            continue;
+        }
         case 'o': lm.mode = lm::mode_control::off; continue;
         case 'h': lm.mode = lm::mode_control::attitude_hold; continue;
         case 'a': lm.mode = lm::mode_control::automatic; continue;
@@ -363,6 +446,7 @@ static int run(const std::filesystem::path& main_file, std::string_view keys, do
     if (landing)
     {
         const lm::landing_start_t start = start_landing(*flight, *assembly, 480.0);
+        navigation_position = assembly->symbols.at("RN").value;
         std::println("landing: uplink at {}, ignition planned {}, TLAND {}", get_text(start.time), get_text(start.ignition), get_text(start.tland));
         std::println("  site  {:12.1f} {:12.1f} {:12.1f} m   lm {:12.1f} {:12.1f} {:12.1f} m  {:8.2f} {:8.2f} {:8.2f} m/s",
             start.site.x, start.site.y, start.site.z, start.position.x, start.position.y, start.position.z, start.velocity.x, start.velocity.y, start.velocity.z);
@@ -560,6 +644,41 @@ static int test(const std::filesystem::path& root)
             std::format("at {:.1f} m the computer's altitude is {:.1f} m", above_site(), erasable("HCALC", 2, 24)));
         check(descent_rate < 0.0 && descent_rate > -1.5 && drift < 0.5, std::format("coming down at {:.2f} m/s, drifting {:.2f} m/s", -descent_rate, drift));
         check(worst_trim / lm::degrees < 1.5, std::format("the trim gimbal holds the thrust through the centre of mass (at most {:.2f} deg)", worst_trim / lm::degrees));
+
+        // touchdown: the contact light, engine stop a few seconds later (the crew's), the footpads down
+        fly(*flight, "!");
+        const lm::touchdown_t& touchdown = flight->lm.touchdown();
+        check(touchdown.contact && !touchdown.landed, "the contact light, the probes touching");
+        fly(*flight, "   s W");
+        check(touchdown.landed && touchdown.descent_rate < 1.0 && touchdown.drift < 0.5,
+            std::format("touchdown at {:.2f} m/s down and {:.2f} m/s across, {:.0f} s after ignition", touchdown.descent_rate, touchdown.drift,
+                start.time + touchdown.time - uplinked_at - tig));
+        check(!engine.on && engine.thrust == 0.0, std::format("engine stop, {:.0f} kg of the descent propellant left", engine.propellant));
+
+        // where: the landing site turned with the moon from TLAND to touchdown
+        const double turned = lm::length(flight->lm.moon_rotation) * (start.time + touchdown.time - uplinked_at - start.tland);
+        const lm::vec3_t pole = flight->lm.moon_rotation / lm::length(flight->lm.moon_rotation);
+        const lm::vec3_t site = lm::frame_rotation(pole, -turned) * start.site;
+        const lm::vec3_t landed = touchdown.position / lm::length(touchdown.position) * lm::length(site);
+        check(lm::length(landed - site) < 300.0, std::format("{:.0f} m from the landing site", lm::length(landed - site)));
+
+        // P68: the computer told it's on the surface, and where it thinks that is
+        fly(*flight, "V37E68E{0643}WW");
+        const agc::dsky_state_t& dsky = flight->computer.dsky().state();
+        const auto register_value = [&](std::size_t index) {
+            const agc::display_register_t& reg = dsky.registers[index];
+            int value = 0;
+            for (const std::int8_t digit : reg.digits)
+                value = value * 10 + (digit == agc::blank_digit ? 0 : digit);
+            return reg.sign == agc::register_sign::minus ? -value : value;
+        };
+        const double latitude = register_value(0) / 100.0, longitude = register_value(1) / 100.0;
+        const lm::vec3_t rls{ 1588471.994, 697547.4954, 21616.9998 };
+        const double site_latitude = std::asin(rls.z / lm::length(rls)) / lm::degrees, site_longitude = std::atan2(rls.y, rls.x) / lm::degrees;
+        const int flagwrd8 = assembly->symbols.at("FLAGWRD8").value;
+        check(field_value(dsky.prog) == 68 && (flight->computer.erasable(flagwrd8) & 000200), "V37E68E: P68, SURFFLAG set");
+        check(std::abs(latitude - site_latitude) < 0.02 && std::abs(longitude - site_longitude) < 0.02,
+            std::format("V06N43: {:.2f} N {:.2f} E, the site {:.3f} N {:.3f} E", latitude, longitude, site_latitude, site_longitude));
         check(flight->computer.restarts() == 0 && no_new_alarms(*flight), std::format("no restarts or alarms on the way ({} restarts, alarms {:05o} {:05o})",
             flight->computer.restarts(), flight->computer.erasable(failreg->second.value + 1), flight->computer.erasable(failreg->second.value + 2)));
     }

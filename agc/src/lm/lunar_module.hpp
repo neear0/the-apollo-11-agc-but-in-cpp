@@ -69,6 +69,18 @@ namespace lm
         vec3_t velocity;             // m/s over the surface, along the antenna's x, y and z
     };
 
+    // on the moon: the gear's probes (67.2 in below the footpads) light the contact light as they touch, and the
+    // footpads take the vehicle. from then it sits where it landed, turning with the moon, held up by the surface
+    struct touchdown_t
+    {
+        bool contact = false;          // the lunar contact light
+        bool landed = false;
+        double time = 0.0;             // s after power-on, when it landed
+        double descent_rate = 0.0;     // m/s, down, at touchdown
+        double drift = 0.0;            // m/s, across the surface
+        vec3_t position;               // reference coordinates, at touchdown
+    };
+
     class c_lunar_module
     {
     public:
@@ -84,6 +96,7 @@ namespace lm
         hand_controller_t hand_controller;
         bool engine_armed = false;                       // the engine arm switch on descent
         bool auto_throttle = true;                       // the throttle on the computer, not the crew's
+        bool engine_stop = false;                        // the engine stop button pushed in: the engine off whatever the computer says
 
         // the moon under it, as the landing radar sees it: a sphere through the landing site, turning
         double surface_radius = lm::moon_radius;         // m
@@ -105,8 +118,11 @@ namespace lm
         const engine_trim_t& engine_trim() const;
         const descent_engine_t& descent_engine() const;
         const landing_radar_t& landing_radar() const;
+        const touchdown_t& touchdown() const;
+        double height() const;                           // the footpads above the surface, upright, m
 
     private:
+        void touch_down(const vec3_t& support, double dt, vec3_t& delta_v);
         void set_switches(agc::c_computer& computer, double dt);
         void run_radar(agc::c_computer& computer, double dt);
         std::uint16_t radar_value(int select) const;
@@ -123,6 +139,8 @@ namespace lm
         engine_trim_t m_engine_trim;
         descent_engine_t m_descent_engine;
         landing_radar_t m_landing_radar;
+        touchdown_t m_touchdown;
+        double m_time = 0.0;                             // s since power-on, as the vehicle has counted it
         double m_simulated_until = -1.0;                 // the computer's time the vehicle has been moved on to
     };
 }
