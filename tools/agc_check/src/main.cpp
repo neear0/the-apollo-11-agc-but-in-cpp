@@ -742,6 +742,56 @@ static int test(const std::filesystem::path& root)
         check(computer.restarts() == 0 && no_new_alarms(*by_hand), "no restarts or alarms");
     }
 
+    // apollo 11's landing as it went: the rendezvous radar on with its cdus out of phase, and V16N68 keyed in the braking
+    // phase. the counters take the computer's spare time, the executive runs out of core sets (1202), the software
+    // restarts, sheds the display, and the landing goes on
+    std::println("Luminary099 landing with the rendezvous radar on: 1202");
+    {
+        const auto flight = std::make_unique<flight_t>(*assembly);
+        start_landing(*flight, *assembly, 480.0);
+        flight->lm.rendezvous_radar_on = true;
+        const int modreg = assembly->symbols.at("MODREG").value;
+        const auto alarms = [&] {
+            return std::array<std::uint16_t, 2>{ flight->computer.erasable(failreg->second.value + 1), flight->computer.erasable(failreg->second.value + 2) };
+        };
+        const auto alarmed = [&](std::uint16_t code) { return alarms()[0] == code || alarms()[1] == code; };
+
+        fly(*flight, "V37E63E{0661}P{5025}E{5018}P{0618}{5018}eE {9962}P");
+        const double give_up = flight->computer.time() + 900.0;
+        while (!flight->lm.landing_radar().range_good && flight->computer.time() < give_up)
+            flight->lm.run(flight->computer, 0.5);
+        fly(*flight, "W V57E MW");
+        check(no_new_alarms(*flight), "the radar locked, V57E, a minute more: no alarms with only the counters running");
+
+        fly(*flight, "V16N68E");
+        const double keyed = flight->computer.time();
+        while (!alarmed(01202) && flight->computer.erasable(modreg) == 63 && flight->computer.time() < keyed + 120.0)
+            flight->lm.run(flight->computer, 0.1);
+        check(alarmed(01202), std::format("V16N68E in P63: alarm 1202 {:.1f} s later (alarms {:05o} {:05o})", flight->computer.time() - keyed, alarms()[0], alarms()[1]));
+        fly(*flight, "WW");
+        // BAILOUT's restart (ENEMA) goes back to the restart protected jobs: the guidance, not the crew's monitor
+        check(shows(*flight, 6, 63) && flight->computer.restarts() == 0, "a software restart, no hardware one: N68 dropped, back to P63's V06N63");
+
+        // on down, the crew's RSET after each alarm, every one of them listed. on apollo 11 there were more: a second
+        // 1202 when Aldrin keyed V16N68 again, and 1201 and 1202 in P64. here neither comes, so Luminary has some
+        // spare time here that it didn't have there, from what isn't known yet
+        std::string later;
+        fly(*flight, "R");
+        while (!flight->lm.touchdown().contact && flight->computer.time() < keyed + 1200.0)
+        {
+            flight->lm.run(flight->computer, 0.5);
+            if (alarms()[0] != 0)
+            {
+                later += std::format(" {:o} in P{}", alarms()[0], flight->computer.erasable(modreg));
+                fly(*flight, "R");
+            }
+        }
+        fly(*flight, "   s W");
+        const lm::touchdown_t& touchdown = flight->lm.touchdown();
+        check(touchdown.landed && touchdown.descent_rate < 1.0 && touchdown.drift < 0.5,
+            std::format("landed anyway, {:.2f} m/s down, alarms after the first:{}", touchdown.descent_rate, later.empty() ? " none" : later));
+    }
+
     std::println("{}", failures == 0 ? "all passed" : std::format("{} failed", failures));
     return failures;
 }

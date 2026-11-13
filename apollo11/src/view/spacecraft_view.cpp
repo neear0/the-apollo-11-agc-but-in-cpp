@@ -228,10 +228,10 @@ void view::spacecraft(lm::c_lunar_module& lunar_module, ImVec2 pos, float height
     const lm::c_imu& imu = lunar_module.imu();
 
     // the ball, with what the imu is doing over it and the gimbal angles and rates under it
-    const ImRect ball_panel(pos, pos + ImVec2(width, px(312.f)));
+    const ImRect ball_panel(pos, pos + ImVec2(width, px(296.f)));
     celosia::render::panel(drawlist, ball_panel.Min, ball_panel.Max, panel, rounding);
 
-    const float radius = px(104.f);
+    const float radius = px(100.f);
     const ImVec2 center(ball_panel.GetCenter().x, ball_panel.Min.y + px(18.f) + radius + px(8.f));
     draw_fdai(drawlist, center, radius, lm::gimbal_matrix(imu.gimbals()), imu.operate);
 
@@ -260,7 +260,7 @@ void view::spacecraft(lm::c_lunar_module& lunar_module, ImVec2 pos, float height
     const ImRect controls(ImVec2(pos.x, ball_panel.Max.y + px(16.f)), ImVec2(pos.x + width, pos.y + height));
     celosia::render::panel(drawlist, controls.Min, controls.Max, panel, rounding);
 
-    const float label_width = px(78.f), row_height = px(28.f), row_gap = px(9.f);
+    const float label_width = px(78.f), row_height = px(26.f), row_gap = px(6.f);
     const float row_left = controls.Min.x + px(12.f), row_right = controls.Max.x - px(12.f);
     float y = controls.Min.y + px(12.f);
     const auto row = [&](const char* label) {
@@ -285,7 +285,13 @@ void view::spacecraft(lm::c_lunar_module& lunar_module, ImVec2 pos, float height
     if (switch_row("##guidance", row("GUIDANCE"), guidance_items, 2, &guidance))
         lunar_module.guidance_pgns = guidance == 0;
 
-    const ImRect jets_row(ImVec2(row_left, y), ImVec2(row_right, y + px(34.f)));
+    // the rendezvous radar: off, or on for the landing as apollo 11 had it, its cdus taking the computer's time
+    static constexpr const char* radar_items[] = { "OFF", "AUTO TRACK" };
+    int radar = lunar_module.rendezvous_radar_on ? 1 : 0;
+    if (switch_row("##rendezvous_radar", row("RNDZ RADAR"), radar_items, 2, &radar))
+        lunar_module.rendezvous_radar_on = radar == 1;
+
+    const ImRect jets_row(ImVec2(row_left, y), ImVec2(row_right, y + px(30.f)));
     switch_label(drawlist, ImRect(jets_row.Min, ImVec2(jets_row.Max.x, jets_row.Min.y + px(14.f))), "RCS");
     draw_jets(drawlist, ImRect(ImVec2(row_left + label_width, jets_row.Min.y), jets_row.Max), lunar_module.jets());
 }

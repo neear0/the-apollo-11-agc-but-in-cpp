@@ -91,6 +91,9 @@ static constexpr std::uint16_t lr_velocity_good = 000200, lr_range_low_scale = 0
 static constexpr std::uint16_t lr_position_2_command = 010000;
 // channel 13: a radar reading under way
 static constexpr std::uint16_t radar_activity = 000010;
+// the rendezvous radar's cdu counters (CDUT, CDUS), and how fast they count when their 800 hz is out of phase
+static constexpr int rr_cdu_trunnion = 035, rr_cdu_shaft = 036;
+static constexpr double rr_cdu_rate = 6400.0; // pulses a second, each
 // channel 16: the rate of descent switch, up and down, each click held this long and let go as long
 static constexpr std::uint16_t rod_up = 000040, rod_down = 000100;
 static constexpr double rod_click = 0.1; // s
@@ -137,6 +140,18 @@ void lm::c_lunar_module::step(agc::c_computer& computer, double dt)
 
     set_switches(computer, dt);
     drive_trim(computer, dt);
+
+    // the rendezvous radar's cdus, on and out of phase: both angles back and forth a count at a time, as fast as they go
+    if (rendezvous_radar_on)
+    {
+        m_rr_pulses += rr_cdu_rate * dt;
+        for (; m_rr_pulses >= 1.0; m_rr_pulses -= 1.0, m_rr_up = !m_rr_up)
+        {
+            const agc::counter_pulse pulse = m_rr_up ? agc::counter_pulse::pcdu : agc::counter_pulse::mcdu;
+            computer.count(rr_cdu_trunnion, pulse);
+            computer.count(rr_cdu_shaft, pulse);
+        }
+    }
     run_engine(computer, dt);
 
     // the jets the computer has on, the torque and thrust they give

@@ -101,6 +101,13 @@ namespace lm
         bool auto_throttle = true;                       // the throttle on the computer, not the crew's
         bool engine_stop = false;                        // the engine stop button pushed in: the engine off whatever the computer says
 
+        // the rendezvous radar, switched on for the landing with its mode switch out of LGC, as Apollo 11's checklist had
+        // it: its cdus run on the 800 hz from the attitude controller, frequency locked to the computer's but at whatever
+        // phase, and so count its shaft and trunnion angles (CDUS, CDUT) up and down at their fastest, 6400 pulses a
+        // second each. every pulse is a memory cycle the program doesn't get, about 15% of them (Don Eyles, "Tales from
+        // the Lunar Module Guidance Computer"). off, nothing
+        bool rendezvous_radar_on = false;
+
         // the rate of descent switch, sprung to the middle: each click up (+1) is a foot a second less coming down in
         // P66, each click down (-1) a foot a second more. clicks one after another, a tenth of a second each way
         void click_rate_of_descent(int clicks);
@@ -154,5 +161,7 @@ namespace lm
         int m_rod_clicked = 0;
         int m_rod_direction = 0;                         // the click under way, held and then let go
         double m_rod_switch = 0.0;                       // s into it
+        double m_rr_pulses = 0.0;                        // the rendezvous radar's cdu pulses owed, each angle
+        bool m_rr_up = true;                             // which way the next ones go
     };
 }
