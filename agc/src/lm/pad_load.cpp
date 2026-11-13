@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include "agc/computer.hpp"
+#include "agc/scaled.hpp"
 #include "yul/assembler.hpp"
 
 // Apollo 11's lunar module erasable load, from the Grumman LM Data Book (LED-540-54, volume II, table LM5/4.5.1-1,
@@ -235,27 +236,14 @@ static std::pair<std::string, int> split_mnemonic(std::string_view mnemonic)
     return { std::string(mnemonic.substr(0, plus)), std::stoi(std::string(mnemonic.substr(plus + 1))) };
 }
 
-// the words a value is stored as: a fraction of 2^scale, 14 bits and a sign a word, in ones' complement (each word of
-// a multiple precision value takes the sign), or one word in two's complement. past the largest fraction it saturates
+// the words a value is stored as (agc::to_scaled), or one word in two's complement
 static std::array<std::uint16_t, 3> encode(double value, int scale, int count, bool twos_complement)
 {
+    if (!twos_complement)
+        return agc::to_scaled(value, scale, count);
     const double fraction = value / std::ldexp(1.0, scale);
-    const long long full = 1ll << (14 * count);
-    const long long magnitude = std::min(std::llround(std::abs(fraction) * static_cast<double>(full)), full - 1);
-    const bool negative = std::signbit(fraction) && magnitude != 0;
-
-    std::array<std::uint16_t, 3> words{};
-    if (twos_complement)
-    {
-        words[0] = static_cast<std::uint16_t>((negative ? 0100000 - magnitude : magnitude) & 077777);
-        return words;
-    }
-    for (int i = 0; i < count; ++i)
-    {
-        const auto word = static_cast<std::uint16_t>((magnitude >> (14 * (count - 1 - i))) & 037777);
-        words[static_cast<std::size_t>(i)] = negative ? static_cast<std::uint16_t>(~word & 077777) : word;
-    }
-    return words;
+    const long long magnitude = std::llround(std::abs(fraction) * 16384.0);
+    return { static_cast<std::uint16_t>((fraction < 0.0 ? 0100000 - magnitude : magnitude) & 077777), 0, 0 };
 }
 
 // the words as one signed number, to compare two encodings a unit apart (the table's rounding isn't always ours)
