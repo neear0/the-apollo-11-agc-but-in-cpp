@@ -1,5 +1,9 @@
 #include "agc/computer.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <utility>
+
 // central registers and the counters, by address
 static constexpr int reg_a = 00, reg_l = 01, reg_q = 02, reg_eb = 03, reg_fb = 04, reg_z = 05, reg_bb = 06, reg_zero = 07;
 static constexpr int reg_zrupt = 015, reg_brupt = 017;
@@ -171,6 +175,22 @@ static bool counter_pinc(std::uint16_t& counter)
     return false;
 }
 
+static bool counter_minc(std::uint16_t& counter)
+{
+    int value = counter;
+    if (value == 040000)
+    {
+        counter = minus_zero;
+        return true;
+    }
+
+    value = (value - 1) & 077777;
+    if (value == minus_zero)
+        --value; // +0 to -1
+    counter = static_cast<std::uint16_t>(value);
+    return false;
+}
+
 static bool counter_dinc(std::uint16_t& counter)
 {
     const int value = counter;
@@ -214,7 +234,16 @@ void agc::c_computer::power_on()
     m_scaler_phase = 0;
     m_downlink = 0;
     m_downrupt_pending = false;
-    m_pro_held = false;
+    m_pro_tapped = false;
+
+    m_night_watchman = m_night_watchman_tripped = false;
+    m_rupt_lock = m_no_rupt = false;
+    m_tc_trap = m_no_tc = false;
+    m_took_bzf = m_took_bzmf = false;
+    m_restarts = 0;
+    m_standby = m_standby_pressed = m_standby_still_pressed = false;
+    m_gyro_pulses = {};
+    m_cdu_drive_pulses = {};
 
     m_dsky.clear();
     m_dsky.set_restart_light(true); // a GOJAM lights it, RSET puts it out
@@ -222,7 +251,12 @@ void agc::c_computer::power_on()
 
 void agc::c_computer::run(double seconds)
 {
-    const std::uint64_t until = m_mct + static_cast<std::uint64_t>(seconds * agc::mcts_per_second);
+    run_until(time() + seconds);
+}
+
+void agc::c_computer::run_until(double seconds)
+{
+    const std::uint64_t until = static_cast<std::uint64_t>(std::llround(std::max(seconds, 0.0) * agc::mcts_per_second));
     while (m_mct < until)
         step();
 }
@@ -230,7 +264,12 @@ void agc::c_computer::run(double seconds)
 void agc::c_computer::step()
 {
     service_inputs();
-    advance(execute());
+
+    // in standby only the scaler runs, which is what brings the computer back
+    if (m_standby)
+        advance(1);
+    else
+        advance(execute());
 }
 
 std::uint64_t agc::c_computer::mct() const
@@ -268,6 +307,50 @@ int agc::c_computer::z() const
     return m_erasable[0][reg_z];
 }
 
+bool agc::c_computer::standby() const
+{
+    return m_standby;
+}
+
+int agc::c_computer::restarts() const
+{
+    return m_restarts;
+}
+
+void agc::c_computer::count(int counter, agc::counter_pulse pulse)
+{
+    std::uint16_t& value = m_erasable[0][static_cast<std::size_t>(counter & 0377)];
+    switch (pulse)
+    {
+    case agc::counter_pulse::pinc: counter_pinc(value); break;
+    case agc::counter_pulse::minc: counter_minc(value); break;
+    case agc::counter_pulse::pcdu: value = static_cast<std::uint16_t>((value + 1) & 077777); break;
+    case agc::counter_pulse::mcdu: value = static_cast<std::uint16_t>((value - 1) & 077777); break;
+    }
+    advance(1);
+}
+
+void agc::c_computer::set_counter(int counter, int value)
+{
+    m_erasable[0][static_cast<std::size_t>(counter & 0377)] = static_cast<std::uint16_t>(value & 077777);
+}
+
+void agc::c_computer::set_input(int channel, std::uint16_t mask, std::uint16_t bits)
+{
+    std::uint16_t& value = m_channels[static_cast<std::size_t>(channel & 0777)];
+    value = static_cast<std::uint16_t>((value & ~mask) | (bits & mask));
+}
+
+std::array<int, 3> agc::c_computer::take_gyro_pulses()
+{
+    return std::exchange(m_gyro_pulses, {});
+}
+
+std::array<int, 3> agc::c_computer::take_cdu_drive_pulses()
+{
+    return std::exchange(m_cdu_drive_pulses, {});
+}
+
 void agc::c_computer::service_inputs()
 {
     // a key on the keypad: its code into channel 15 and KEYRUPT1. pro is a button held down, channel 32 bit 14 low
@@ -280,16 +363,22 @@ void agc::c_computer::service_inputs()
         }
         else
         {
-            m_channels[channel_32] &= static_cast<std::uint16_t>(~020000);
-            m_pro_held = true;
+            m_pro_tapped = true;
             m_pro_release_at = m_mct + static_cast<std::uint64_t>(0.25 * agc::mcts_per_second); // the software looks every 120 ms
         }
     }
 
-    if (m_pro_held && m_mct >= m_pro_release_at)
+    if (m_pro_tapped && m_mct >= m_pro_release_at)
+        m_pro_tapped = false;
+
+    const bool pro = m_pro_tapped || m_dsky.proceed_held();
+    if (pro)
+        m_channels[channel_32] &= static_cast<std::uint16_t>(~020000);
+    else
     {
         m_channels[channel_32] |= 020000;
-        m_pro_held = false;
+        m_standby_pressed = false; // the standby circuit only counts pro held the whole time
+        m_standby_still_pressed = false;
     }
 
     if (m_downrupt_pending && m_mct >= m_downrupt_at)
@@ -321,6 +410,16 @@ int agc::c_computer::scaler_tick()
         m_channels[channel_hiscalar] = static_cast<std::uint16_t>((m_channels[channel_hiscalar] + 1) & 037777);
     }
     m_channels[channel_loscalar] = static_cast<std::uint16_t>(scaler);
+
+    const bool was_standby = m_standby;
+    const int alarms = alarm_checks(scaler);
+    if (m_standby || was_standby)
+    {
+        // going to standby is a GOJAM too, without the light. coming back the computer starts at 4000 as it left off
+        if (m_standby && !was_standby)
+            gojam(false);
+        return 0;
+    }
 
     // TIME1-TIME5 count every 10 ms, at different phases of the scaler. TIME6 counts down at 1600 hz while enabled
     int mcts = 0;
@@ -361,15 +460,153 @@ int agc::c_computer::scaler_tick()
         }
     }
 
+    mcts += output_counters(scaler);
+
+    if (alarms)
+    {
+        m_channels[077] |= static_cast<std::uint16_t>(alarms);
+        gojam(true);
+        mcts += 2; // GOJAM and the TC 4000 after it
+    }
     return mcts;
+}
+
+// the night watchman and the standby circuit look every 1.28 s, half a period apart. the rupt lock looks every 160
+// ms, the tc trap every 10 ms
+int agc::c_computer::alarm_checks(int scaler)
+{
+    int alarms = 0;
+    if ((scaler & 07777) == 04000)
+    {
+        if (!m_standby)
+            m_night_watchman = true;
+
+        if (m_standby_pressed && ((m_channels[channel_13] & 002000) || m_standby))
+        {
+            if (!m_standby)
+            {
+                m_standby = true;
+                m_standby_still_pressed = true; // pro has to be let go before holding it again brings the computer back
+                m_dsky.set_standby(true);
+            }
+            else if (!m_standby_still_pressed)
+            {
+                m_standby = false;
+                m_dsky.set_standby(false);
+            }
+        }
+    }
+    else if ((scaler & 07777) == 0)
+    {
+        if (!(m_channels[channel_32] & 020000))
+            m_standby_pressed = true;
+
+        if (!m_standby && m_night_watchman)
+        {
+            alarms |= agc::alarm_night_watchman;
+            m_night_watchman_tripped = true;
+        }
+        else
+            m_night_watchman_tripped = false;
+    }
+
+    if (m_standby)
+        return 0;
+
+    if ((scaler & 0777) == 0400)
+        m_rupt_lock = m_no_rupt = true;
+    else if ((m_rupt_lock || m_no_rupt) && (scaler & 0777) == 0300)
+        alarms |= agc::alarm_rupt_lock;
+
+    if ((scaler & 037) == 020)
+        m_tc_trap = m_no_tc = true;
+    else if ((m_tc_trap || m_no_tc) && (scaler & 037) == 0)
+        alarms |= agc::alarm_tc_trap;
+
+    return alarms;
+}
+
+// the counters the computer counts out of: GYROCMD to the gyro channel 14 selects at 3200 pulses a second, and
+// CDUXCMD-CDUZCMD to the imu's coarse align at 800 a second, while channel 14 says so. each pulse takes a cycle
+int agc::c_computer::output_counters(int scaler)
+{
+    static constexpr int gyrocmd = 047, cduxcmd = 050;
+    static constexpr int channel_14 = 014;
+    int mcts = 0;
+
+    std::array<std::uint16_t, 0400>& registers = m_erasable[0];
+    const int channel14 = m_channels[channel_14];
+    if (channel14 & 001000)
+    {
+        std::uint16_t& counter = registers[gyrocmd];
+        const bool negative_count = (counter & 040000) != 0;
+        if (!counter_dinc(counter))
+        {
+            // all positive in practice: the sign of the torque is bit 9, the gyro bits 7 and 8 (x 1, y 2, z 3)
+            const int axis = (channel14 >> 6) & 3;
+            const int sign = ((channel14 & 000400) != 0) != negative_count ? -1 : 1;
+            if (axis != 0)
+                m_gyro_pulses[static_cast<std::size_t>(axis - 1)] += sign;
+        }
+        ++mcts;
+    }
+
+    if ((scaler & 3) == 0)
+    {
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            if (!(channel14 & (040000 >> axis)))
+                continue;
+
+            std::uint16_t& counter = registers[static_cast<std::size_t>(cduxcmd + axis)];
+            const bool negative = (counter & 040000) != 0;
+            if (!counter_dinc(counter))
+                m_cdu_drive_pulses[static_cast<std::size_t>(axis)] += negative ? -1 : 1;
+            ++mcts;
+        }
+    }
+    return mcts;
+}
+
+void agc::c_computer::gojam(bool restart_light)
+{
+    set(reg_q, get(reg_z));
+    m_next_z = 04000;
+    set(reg_z, 04000);
+    m_in_isr = false;
+    m_allow_interrupt = true;
+    m_interrupt_requests.fill(false);
+
+    for (const int number : { 005, 006, 010, 011, 012, 013, 014 })
+        cpu_write_channel(number, 0);
+    m_channels[channel_33] |= 002000; // uplink too fast
+    cpu_write_channel(034, 0);
+    cpu_write_channel(035, 0);
+    m_downrupt_pending = false;
+    m_downlink = 0;
+
+    m_index_value = 0;
+    m_extra_code = false;
+    m_substitute_instruction = false;
+    m_took_bzf = m_took_bzmf = false;
+
+    if (restart_light)
+    {
+        m_dsky.set_restart_light(true);
+        ++m_restarts;
+    }
 }
 
 // -----------------------------------------------------------------------------------------------------------------
 // memory
 
-agc::c_computer::location_t agc::c_computer::locate(int address12) const
+agc::c_computer::location_t agc::c_computer::locate(int address12)
 {
+    static constexpr int newjob = 067; // the executive looks at it in its idle loop, the night watchman watches for that
+
     address12 &= 07777;
+    if (address12 == newjob)
+        m_night_watchman = false;
     if (address12 < 01400)
         return { false, address12 };
     if (address12 < 02000)
@@ -504,7 +741,7 @@ void agc::c_computer::cpu_write_channel(int number, int value)
         value = m_channels[channel_33];
     }
     else if (number == 077)
-        value = 0;
+        value = m_night_watchman_tripped ? agc::alarm_night_watchman : 0; // writing resets the restart monitor's alarm bits
     else if (number == channel_lights && (value & 01000))
         m_dsky.set_restart_light(false);
 
@@ -594,6 +831,12 @@ int agc::c_computer::execute()
     set(reg_z, m_next_z);
     bool keep_extra_code = false;
 
+    // for the tc trap: a TC or TCF, or something the hardware takes for one (a branch taken by BZF or BZMF and what
+    // follows it, CS)
+    bool executed_tc = false;
+    bool tc_transient = m_took_bzf && !(extended_opcode == 000 && address12 == 6);
+    bool took_bzf = false, took_bzmf = false;
+
     const auto resume = [&] {
         m_next_z = get(reg_zrupt) - 1;
         m_in_isr = false;
@@ -603,10 +846,11 @@ int agc::c_computer::execute()
     switch (extended_opcode)
     {
     case 000: case 001: case 002: case 003: case 004: case 005: case 006: case 007: // TC
-        if (address12 == 3)
-            m_allow_interrupt = true; // RELINT
-        else if (address12 == 4)
-            m_allow_interrupt = false; // INHINT
+        if (address12 == 3 || address12 == 4)
+        {
+            m_allow_interrupt = address12 == 3; // RELINT, INHINT
+            tc_transient = tc_transient || m_took_bzf || m_took_bzmf;
+        }
         else if (address12 == 6)
         {
             m_extra_code = true; // EXTEND
@@ -617,6 +861,7 @@ int agc::c_computer::execute()
             if (address12 != reg_q)
                 set(reg_q, m_next_z);
             m_next_z = address12;
+            executed_tc = true;
         }
         break;
 
@@ -652,6 +897,7 @@ int agc::c_computer::execute()
 
     case 012: case 013: case 014: case 015: case 016: case 017: // TCF
         m_next_z = address12;
+        executed_tc = true;
         break;
 
     case 020: case 021: // DAS, the operand is K + 1
@@ -769,6 +1015,7 @@ int agc::c_computer::execute()
 
     case 040: case 041: case 042: case 043: case 044: case 045: case 046: case 047: // CS
     {
+        tc_transient = true;
         if (address12 == reg_a) // COM
         {
             set(reg_a, ~accumulator);
@@ -1036,7 +1283,10 @@ int agc::c_computer::execute()
 
     case 0112: case 0113: case 0114: case 0115: case 0116: case 0117: // BZF
         if (accumulator == 0 || accumulator == 0177777)
+        {
             m_next_z = address12;
+            took_bzf = true;
+        }
         break;
 
     case 0120: case 0121: // MSU: modular (two's complement) subtraction, for the cdu counters
@@ -1169,7 +1419,10 @@ int agc::c_computer::execute()
 
     case 0162: case 0163: case 0164: case 0165: case 0166: case 0167: // BZMF
         if (accumulator == 0 || (accumulator & 0100000))
+        {
             m_next_z = address12;
+            took_bzmf = true;
+        }
         break;
 
     case 0170: case 0171: case 0172: case 0173: case 0174: case 0175: case 0176: case 0177: // MP
@@ -1202,6 +1455,19 @@ int agc::c_computer::execute()
     }
 
     finish(current_eb, current_fb, current_bb, keep_extra_code);
+
+    // what the restart monitor watches for happened
+    if (m_in_isr)
+        m_no_rupt = false;
+    else
+        m_rupt_lock = false;
+    if (executed_tc || tc_transient)
+        m_no_tc = false;
+    if (!executed_tc)
+        m_tc_trap = false;
+    m_took_bzf = took_bzf;
+    m_took_bzmf = took_bzmf;
+
     return mcts;
 }
 

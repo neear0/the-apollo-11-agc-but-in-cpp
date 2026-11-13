@@ -66,6 +66,16 @@ std::optional<agc::dsky_key> agc::c_dsky::take_key()
     return std::exchange(m_pending_key, std::nullopt);
 }
 
+void agc::c_dsky::hold_proceed(bool held)
+{
+    m_proceed_held = held;
+}
+
+bool agc::c_dsky::proceed_held() const
+{
+    return m_proceed_held;
+}
+
 // the 5-bit relay code of a digit, blank for any other
 static std::int8_t relay_digit(int code)
 {
@@ -145,6 +155,12 @@ void agc::c_dsky::write_channel11(std::uint16_t value)
 void agc::c_dsky::set_restart_light(bool on)
 {
     m_state.lights.restart = on;
+}
+
+void agc::c_dsky::set_standby(bool on)
+{
+    m_state.lights.stby = on;
+    m_state.display_off = on;
 }
 
 void agc::c_dsky::clear()

@@ -48,6 +48,7 @@ namespace agc
     // everything the dsky shows, a digit is 0-9 or blank_digit
     struct dsky_state_t
     {
+        bool display_off = false;     // the computer is in standby: the electroluminescent display is dark
         bool comp_acty = false;
         bool verb_noun_flash = false; // the verb and noun digits blink, the computer wants a response
         std::array<std::int8_t, 2> prog{ blank_digit, blank_digit };
@@ -67,19 +68,25 @@ namespace agc
         const dsky_state_t& state() const;
         dsky_state_t& state();
 
-        // from the keypad. the computer takes them one at a time, a key pressed before it took the last one replaces it
+        // from the keypad. the computer takes them one at a time, a key pressed before it took the last one replaces it.
+        // pro is a button rather than a key: a press holds it down for a moment, hold_proceed() for as long as wanted
+        // (going to standby and back takes holding it for a few seconds)
         void press_key(dsky_key key);
         std::optional<dsky_key> pending_key() const;
         std::optional<dsky_key> take_key();
+        void hold_proceed(bool held);
+        bool proceed_held() const;
 
         // from the computer
         void write_channel10(std::uint16_t value); // a relay word: two digits (and a sign bit) or the lights in word 12
         void write_channel11(std::uint16_t value); // comp acty, uplink acty, temp, key rel, verb/noun flash, opr err
         void set_restart_light(bool on);
+        void set_standby(bool on);                 // the stby light on and the display off
         void clear();                              // everything off, as at power-on
 
     private:
         dsky_state_t m_state{};
         std::optional<dsky_key> m_pending_key;
+        bool m_proceed_held = false;
     };
 }
