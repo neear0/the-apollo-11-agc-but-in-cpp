@@ -5,10 +5,19 @@
 #include "ui/ui.h"
 
 #include "app.hpp"
+#include "view/descent_view.hpp"
 #include "view/dsky_view.hpp"
 #include "view/spacecraft_view.hpp"
 
-// what's running on the left, how long since power-on on the right, along the bottom
+// hh:mm:ss
+static std::string clock_text(double seconds)
+{
+    const int whole = static_cast<int>(seconds);
+    return std::format("{:02}:{:02}:{:02}", whole / 3600, whole / 60 % 60, whole % 60);
+}
+
+// what's running on the left, the time on the right (since launch on the landing, since power-on otherwise), along
+// the bottom
 static void status_line(ImDrawList* drawlist, float top, float margin)
 {
     const agc::c_computer& computer = app::computer();
@@ -21,9 +30,10 @@ static void status_line(ImDrawList* drawlist, float top, float margin)
         status += "  -  standby";
     if (computer.restarts() > 0)
         status += std::format("  -  {} hardware restart{}", computer.restarts(), computer.restarts() == 1 ? "" : "s");
+    if (const app::landing_t* landing = app::landing())
+        status += std::format("  -  landing, ignition planned at {}", clock_text(landing->start.ignition));
 
-    const int seconds = static_cast<int>(computer.time());
-    const std::string clock = std::format("{:02}:{:02}:{:02}", seconds / 3600, seconds / 60 % 60, seconds % 60);
+    const std::string clock = clock_text(app::mission_time());
 
     const float line = celosia::render::text::size("A", nullptr, small).y;
     const float y = std::floor(top + (celosia::ui::size.y - top - line) * 0.5f);
@@ -57,12 +67,16 @@ void celosia::render::main_window()
     view::keyboard(dsky);
     view::hand_controller(lunar_module);
 
-    // the lunar module on the left, the dsky on the right
+    // the lunar module on the left, the dsky in the middle, the descent on the right
     const float margin = 16.f * celosia::style::scale;
     const float top = celosia::style::titlebar::height + margin;
     const float height = view::dsky_size().y;
-    view::spacecraft(lunar_module, ImVec2(margin, top), height);
-    view::dsky(dsky, ImVec2(margin + view::spacecraft_size().x + margin, top));
+    float x = margin;
+    view::spacecraft(lunar_module, ImVec2(x, top), height);
+    x += view::spacecraft_size().x + margin;
+    view::dsky(dsky, ImVec2(x, top));
+    x += view::dsky_size().x + margin;
+    view::descent(lunar_module, ImVec2(x, top), height);
     status_line(drawlist, top + height, margin);
 
     celosia::window::end();

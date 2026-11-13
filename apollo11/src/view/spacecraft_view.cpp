@@ -6,17 +6,12 @@
 #include <format>
 #include <string>
 
-// sizes are in units at scale 1, px() scales them the way CelosUI scales its own style
+#include "view/controls.hpp"
 
-static float px(float value)
-{
-    return value * celosia::style::scale;
-}
-
-static ImVec2 px(float x, float y)
-{
-    return ImVec2(x, y) * celosia::style::scale;
-}
+using view::dim;
+using view::px;
+using view::switch_label;
+using view::switch_row;
 
 static constexpr ImU32 ball_sky        = IM_COL32(214, 214, 206, 255);
 static constexpr ImU32 ball_ground     = IM_COL32(46, 47, 52, 255);
@@ -27,12 +22,6 @@ static constexpr ImU32 ball_rim        = IM_COL32(10, 10, 12, 255);
 static constexpr ImU32 index_color     = IM_COL32(255, 190, 70, 255);
 static constexpr ImU32 jet_on          = IM_COL32(255, 190, 70, 255);
 static constexpr ImU32 jet_off         = IM_COL32(255, 255, 255, 18);
-
-static ImU32 dim(ImColor color, float alpha)
-{
-    color.Value.w *= alpha;
-    return color;
-}
 
 static ImU32 shaded(ImU32 color, float light)
 {
@@ -207,72 +196,6 @@ static void draw_fdai(ImDrawList* drawlist, ImVec2 center, float radius, const l
 }
 
 // -----------------------------------------------------------------------------------------------------------------
-// switches: a row of choices in one frame, the picked one in the accent, like widgets::segmented but sized to fit
-
-static bool switch_row(const char* id_label, const ImRect& frame, const char* const items[], int count, int* current)
-{
-    const ImGuiID id = celosia::core::id(id_label);
-    celosia::core::layout(frame);
-    if (!celosia::core::add(frame, id, celosia::core::item_no_focus))
-        return false;
-
-    ImDrawList* drawlist = celosia::core::drawlist();
-    const celosia::style::themes::t_theme& theme = celosia::style::themes::active;
-    const ImVec4 accent = celosia::style::general::accent.Value;
-    const float rounding = static_cast<float>(celosia::style::general::rounding);
-    const float segment = frame.GetWidth() / static_cast<float>(count);
-
-    ImVec4 border = ImLerp(theme.idle.Value, theme.text.Value, 0.12f);
-    border.w = theme.idle.Value.w;
-    drawlist->AddRectFilled(frame.Min, frame.Max, theme.idle, rounding);
-    drawlist->AddRect(frame.Min, frame.Max, ImColor(border), rounding, 0, celosia::style::frame::border_size);
-
-    bool changed = false;
-    for (int i = 0; i < count; ++i)
-    {
-        const ImRect rect(ImVec2(frame.Min.x + segment * static_cast<float>(i), frame.Min.y), ImVec2(frame.Min.x + segment * static_cast<float>(i + 1), frame.Max.y));
-        const ImGuiID item = ImHashData(&i, sizeof(i), id);
-        if (!celosia::core::add(rect, item))
-            continue;
-
-        bool hovered = false, held = false;
-        if (celosia::core::button(rect, item, &hovered, &held) && *current != i)
-        {
-            *current = i;
-            changed = true;
-        }
-        if (hovered && *current != i)
-            drawlist->AddRectFilled(rect.Min, rect.Max, dim(theme.text, 0.08f), rounding);
-    }
-
-    // the pill slides to the one picked
-    const float inset = px(3.f);
-    const float pill_x = celosia::animations::set(celosia::animations::key("switch_pill", id), segment * static_cast<float>(*current), 14.f);
-    const ImVec2 pill_min(frame.Min.x + pill_x + inset, frame.Min.y + inset), pill_max(frame.Min.x + pill_x + segment - inset, frame.Max.y - inset);
-    celosia::effects::glow(drawlist, pill_min, pill_max, ImColor(accent.x, accent.y, accent.z, 0.3f), rounding, px(6.f));
-    drawlist->AddRectFilled(pill_min, pill_max, ImColor(accent), std::max(rounding - inset * 0.5f, 0.f));
-
-    ImFont* font = celosia::resources::fonts::get("dsky_label");
-    const ImVec4 on_accent = celosia::style::themes::text_on(accent).Value;
-    for (int i = 0; i < count; ++i)
-    {
-        const float x = frame.Min.x + segment * static_cast<float>(i);
-        const float covered = ImSaturate(1.f - std::fabs(pill_x - segment * static_cast<float>(i)) / segment);
-        const ImVec2 size = celosia::render::text::size(items[i], nullptr, font);
-        const ImVec2 at(std::floor(x + (segment - size.x) * 0.5f), std::floor(frame.GetCenter().y - size.y * 0.5f));
-        celosia::render::text::draw(drawlist, at, ImColor(ImLerp(theme.text.Value, on_accent, covered)), items[i], nullptr, font);
-    }
-    return changed;
-}
-
-// a label left of a switch row
-static void switch_label(ImDrawList* drawlist, const ImRect& row, const char* label)
-{
-    ImFont* font = celosia::resources::fonts::get("dsky_label");
-    const ImVec2 size = celosia::render::text::size(label, nullptr, font);
-    celosia::render::text::draw(drawlist, ImVec2(row.Min.x, std::floor(row.GetCenter().y - size.y * 0.5f)), dim(celosia::style::themes::active.text, 0.6f), label, nullptr, font);
-}
-
 // the 16 jets, channel 5's on top, lit while they fire
 static void draw_jets(ImDrawList* drawlist, const ImRect& rect, std::uint16_t jets)
 {

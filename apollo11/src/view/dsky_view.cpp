@@ -2,24 +2,14 @@
 
 #include <array>
 #include <cmath>
-#include <cstring>
 #include <format>
 #include <span>
 #include <string>
 
 #include "ui/ui.h"
+#include "view/controls.hpp"
 
-// sizes are in units at scale 1, px() scales them the way CelosUI scales its own style
-
-static float px(float value)
-{
-    return value * celosia::style::scale;
-}
-
-static ImVec2 px(float x, float y)
-{
-    return ImVec2(x, y) * celosia::style::scale;
-}
+using view::px;
 
 // the electroluminescent display's green, and the lights' white and amber
 static constexpr ImU32 el_lit          = IM_COL32(124, 255, 128, 255);
@@ -29,8 +19,6 @@ static constexpr ImU32 el_label_text   = IM_COL32(10, 26, 12, 255);
 static constexpr ImU32 el_background   = IM_COL32(8, 12, 9, 235);
 static constexpr ImU32 light_white     = IM_COL32(236, 236, 224, 255);
 static constexpr ImU32 light_amber     = IM_COL32(255, 190, 70, 255);
-static constexpr ImU32 light_off       = IM_COL32(255, 255, 255, 14);
-static constexpr ImU32 light_text_lit  = IM_COL32(24, 22, 18, 255);
 
 static constexpr float digit_width  = 22.f;
 static constexpr float digit_height = 36.f;
@@ -40,39 +28,6 @@ static constexpr float sign_width   = 18.f;
 
 // segments a to g as bits 0 to 6, a at the top going clockwise and g in the middle
 static constexpr std::array<std::uint8_t, 10> segment_patterns = { 0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F };
-
-static ImU32 dim(ImColor color, float alpha)
-{
-    color.Value.w *= alpha;
-    return color;
-}
-
-// text centered in rect, line by line
-static void draw_centered(ImDrawList* drawlist, const ImRect& rect, ImU32 color, const char* text, ImFont* font)
-{
-    int lines = 1;
-    for (const char* c = text; *c; ++c)
-        lines += *c == '\n';
-
-    const float line_height = celosia::render::text::size("A", nullptr, font).y;
-    float y = std::floor(rect.GetCenter().y - line_height * static_cast<float>(lines) * 0.5f);
-
-    for (const char* line = text; ; )
-    {
-        const char* line_end = std::strchr(line, '\n');
-        if (!line_end)
-            line_end = line + std::strlen(line);
-
-        const ImVec2 size = celosia::render::text::size(line, line_end, font);
-        celosia::render::text::draw(drawlist, ImVec2(std::floor(rect.GetCenter().x - size.x * 0.5f), y), color, line, line_end, font);
-
-        if (!*line_end)
-            break;
-
-        line = line_end + 1;
-        y += line_height;
-    }
-}
 
 static void draw_digit(ImDrawList* drawlist, ImVec2 pos, std::int8_t digit)
 {
@@ -119,7 +74,7 @@ static void draw_sign(ImDrawList* drawlist, ImVec2 pos, agc::register_sign sign)
 static void draw_el_label(ImDrawList* drawlist, const ImRect& rect, const char* text, bool lit, ImFont* font)
 {
     drawlist->AddRectFilled(rect.Min, rect.Max, lit ? el_lit : el_unlit, px(2.f));
-    draw_centered(drawlist, rect, lit ? el_label_text : el_unlit_text, text, font);
+    view::draw_centered(drawlist, rect, lit ? el_label_text : el_unlit_text, text, font);
 }
 
 // prog, verb and noun: a label with two digits under it
@@ -197,56 +152,12 @@ static void draw_lights(ImDrawList* drawlist, const ImRect& rect, const agc::lig
     const ImVec2 size = px(96.f, 36.f);
     const ImVec2 step = size + px(8.f, 6.f);
     const ImVec2 origin = rect.Min + px(12.f, 12.f);
-    const ImU32 text_off = dim(celosia::style::themes::active.text, 0.35f);
-
     for (std::size_t i = 0; i < slots.size(); ++i)
     {
         const light_t& slot = slots[i];
         const ImVec2 min = origin + ImVec2(step.x * static_cast<float>(i % 2), step.y * static_cast<float>(i / 2));
-        const bool exists = slot.label[0] != '\0';
-        const bool on = exists && slot.lit;
-
-        drawlist->AddRectFilled(min, min + size, on ? slot.color : light_off, px(3.f));
-        if (exists)
-            draw_centered(drawlist, ImRect(min, min + size), on ? light_text_lit : text_off, slot.label, font);
+        view::draw_light(drawlist, ImRect(min, min + size), slot.label, slot.lit, slot.color, font);
     }
-}
-
-// a keypad key: core's button with the frames and glow of widgets::button, and its label in the given font. held while
-// the mouse button is down on it
-static bool key_button(const char* label, const ImRect& bb, ImFont* font, bool* held_down = nullptr)
-{
-    const ImGuiID id = celosia::core::id(label);
-    celosia::core::layout(bb);
-    if (!celosia::core::add(bb, id))
-        return false;
-
-    bool hovered = false, held = false;
-    const bool pressed = celosia::core::button(bb, id, &hovered, &held);
-    if (held_down)
-        *held_down = held;
-
-    const float rounding = static_cast<float>(celosia::style::general::rounding);
-    const float glow = celosia::animations::set(celosia::animations::key("dsky_key_glow", id), hovered ? 1.f : 0.f);
-    if (glow > 0.01f)
-    {
-        const ImVec4 accent = celosia::style::general::accent.Value;
-        celosia::effects::glow(celosia::core::drawlist(), bb.Min, bb.Max, ImColor(accent.x, accent.y, accent.z, 0.35f * glow), rounding, px(8.f));
-    }
-
-    const celosia::style::themes::t_theme& theme = celosia::style::themes::active;
-    const ImColor color = (held && hovered) ? theme.held : hovered ? theme.hovered : theme.idle;
-
-    ImVec4 fill = ImLerp(color.Value, theme.background_darker.Value, 0.25f);
-    fill.w = color.Value.w;
-    ImVec4 border = ImLerp(color.Value, theme.text.Value, 0.12f);
-    border.w = color.Value.w;
-
-    celosia::widgets::render_frame_animated(id, bb.Min, bb.Max, fill, rounding);
-    celosia::widgets::render_frame_border_animated(id, bb.Min, bb.Max, border, rounding);
-    draw_centered(celosia::core::drawlist(), bb, theme.text, label, font);
-
-    return pressed;
 }
 
 struct key_slot_t
@@ -299,7 +210,7 @@ void view::dsky(agc::c_dsky& dsky, ImVec2 pos)
     {
         const ImVec2 min = keypad + ImVec2(key_step.x * slot.column, key_step.y * slot.row);
         bool held = false;
-        if (key_button(slot.label, ImRect(min, min + key_size), key_font, &held))
+        if (view::button(slot.label, ImRect(min, min + key_size), key_font, &held))
             dsky.press_key(slot.key);
         if (slot.key == agc::dsky_key::proceed && held)
         {

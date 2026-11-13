@@ -10,12 +10,16 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\main.cpp"><Filter>src</Filter></ClCompile>
+    <ClCompile Include="src\view\controls.cpp"><Filter>src\view</Filter></ClCompile>
+    <ClCompile Include="src\view\descent_view.cpp"><Filter>src\view</Filter></ClCompile>
     <ClCompile Include="src\view\dsky_view.cpp"><Filter>src\view</Filter></ClCompile>
     <ClCompile Include="src\view\main_window.cpp"><Filter>src\view</Filter></ClCompile>
     <ClCompile Include="src\view\spacecraft_view.cpp"><Filter>src\view</Filter></ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\app.hpp"><Filter>src</Filter></ClInclude>
+    <ClInclude Include="src\view\controls.hpp"><Filter>src\view</Filter></ClInclude>
+    <ClInclude Include="src\view\descent_view.hpp"><Filter>src\view</Filter></ClInclude>
     <ClInclude Include="src\view\dsky_view.hpp"><Filter>src\view</Filter></ClInclude>
     <ClInclude Include="src\view\spacecraft_view.hpp"><Filter>src\view</Filter></ClInclude>
   </ItemGroup>
