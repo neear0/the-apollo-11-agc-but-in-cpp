@@ -8,17 +8,25 @@ because I'm bored and I can recycle this as a college class project
 
 ## what it is
 
-the original apollo 11 guidance computer source (`Luminary099` for the lunar module, `Comanche055` for the command module), assembled by a c++23 yul assembler and run on a c++23 block ii agc, inside a simulated lunar module, with a dsky you can actually press
+the software isn't rewritten: it's the original 1969 assembly, the code that flew (`Luminary099` for the lunar module, `Comanche055` for the command module). the c++ is everything it needs to run:
+
+- the assembler that turns the source into a rope, word for word what MIT's YUL assembler made, checksums included
+- the computer it runs on, a block ii agc
+- the dsky you talk to it with
+- the lunar module around it
+
+so it's an emulator, not a port. the autopilot in the rope is what flies the lunar module: the jets it fires turn the vehicle, the imu measures it, it reads that back
+
+## layout
 
 - `agc/` - no ui
+  - `yul::` - the assembler
   - `agc::c_computer` - the cpu, timers, interrupts, i/o channels, and the restart monitor (night watchman, rupt lock, tc trap) and standby
   - `agc::c_dsky` - the display and keyboard
-  - `yul::` - the assembler
-  - `lm::` - the lunar module: imu (gimbals, cdus, coarse align, gyro torquing, pipas), 16 rcs jets, rigid body attitude, the crew's switches and hand controller
+  - `lm::` - the lunar module: imu (gimbals, cdus, coarse align, gyro torquing, pipas), 16 rcs jets, rigid body attitude, descent engine trim gimbal, the crew's switches and hand controller, the pad load
 - `apollo11/` - the app: luminary 099 flying the lunar module, fdai ball and switches on the left, dsky on the right, drawn with [CelosUI](https://github.com/neear0/celosUI)
-- `tools/agc_check/` - console tool: `assemble <MAIN.agc> --compare <rope>` and `run <MAIN.agc> "V16N65E"`
-
-the assembler reproduces both original ropes word for word, checksums included. the autopilot in the rope is what flies the lunar module: the jets it fires turn the vehicle, the imu measures it, it reads that back
+- `tools/agc_check/` - console tool: `assemble <MAIN.agc> --compare <rope>`, `run <MAIN.agc> "V16N65E"`, `test`
+- `Luminary099/`, `Comanche055/` - the 1969 source as Virtual AGC transcribed it, with a handful of transcription fixes so it assembles
 
 ## build
 
