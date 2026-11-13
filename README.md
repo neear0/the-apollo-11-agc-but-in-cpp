@@ -23,8 +23,13 @@ the assembler reproduces both original ropes word for word, checksums included. 
 ## build
 
 - visual studio 2022, x64
-- clone [CelosUI](https://github.com/neear0/celosUI) next to this repo (`..\CelosUI`), or set `CelosUIDir`
+- clone [CelosUI](https://github.com/neear0/celosUI) next to this repo (`..\CelosUI`), or set `CelosUIDir`. built and tested with CelosUI `d297d47`
 - open `apollo11.sln`, build, run
+
+## test
+
+- `agc_check test` from the repo root: both ropes against the 1969 ones (`tests/ropes`), then luminary flying the lm: imu turn-on, V49, V48, hand flying, standby. about 5 seconds, exit code is the failures
+- ci runs it on every push, without the ui (no CelosUI needed)
 
 ## try
 
@@ -42,7 +47,11 @@ the assembler reproduces both original ropes word for word, checksums included. 
 
 ## not simulated
 
-the descent and ascent engines, the radars, the aot, orbits and gravity, uplink. programs that want them will complain with alarms
+the descent and ascent engines (just the descent engine's trim gimbal), the radars, the aot, orbits and gravity, uplink. programs that want them will complain with alarms
+
+the pad load, the erasable words the ground loaded before launch, is only what the programs here need (`agc/src/lm/pad_load.cpp`). the computer powers on with erasable cleared, so the first fresh start is alarm 1107 (PROG lit), as on a real cold start
+
+comanche 055, the command module's program, assembles word for word but doesn't run: there's no command module
 
 ## credits
 
