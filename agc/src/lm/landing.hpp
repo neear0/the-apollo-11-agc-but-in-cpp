@@ -43,6 +43,9 @@ namespace lm
     // horizontal at VIGN, in the site's plane), the time lead seconds before ignition. the moon a point mass (MUM)
     landing_start_t plan_landing(const agc::c_computer& computer, const yul::assembly_t& assembly, double lead);
 
+    // the landing site, turned with the moon from TLAND to seconds since launch, reference coordinates
+    vec3_t site_at(const landing_start_t& start, double seconds);
+
     // what the crew's alignment would have done, before the imu is turned on: the vehicle turned to the landing site
     // alignment, so the stable member cages to it
     void align_for_landing(c_lunar_module& lunar_module, const landing_start_t& start);

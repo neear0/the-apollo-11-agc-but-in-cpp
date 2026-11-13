@@ -656,9 +656,7 @@ static int test(const std::filesystem::path& root)
         check(!engine.on && engine.thrust == 0.0, std::format("engine stop, {:.0f} kg of the descent propellant left", engine.propellant));
 
         // where: the landing site turned with the moon from TLAND to touchdown
-        const double turned = lm::length(flight->lm.moon_rotation) * (start.time + touchdown.time - uplinked_at - start.tland);
-        const lm::vec3_t pole = flight->lm.moon_rotation / lm::length(flight->lm.moon_rotation);
-        const lm::vec3_t site = lm::frame_rotation(pole, -turned) * start.site;
+        const lm::vec3_t site = lm::site_at(start, start.time + touchdown.time - uplinked_at);
         const lm::vec3_t landed = touchdown.position / lm::length(touchdown.position) * lm::length(site);
         check(lm::length(landed - site) < 300.0, std::format("{:.0f} m from the landing site", lm::length(landed - site)));
 

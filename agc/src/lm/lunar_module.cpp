@@ -9,9 +9,8 @@
 #include "agc/computer.hpp"
 
 // Apollo 11's lunar module at descent orbit insertion, the mass the pad load gives (MASS, 33664 lb), with the descent
-// stage's propellant (18184 lb loaded)
+// stage's propellant (lm::descent_propellant)
 static constexpr double initial_mass = 15269.7;                     // kg
-static constexpr double descent_propellant = 8248.0;                // kg, of the initial mass
 static constexpr double jet_thrust = 445.0;                         // n, 100 pounds
 static constexpr double jet_arm = 1.68;                             // m, from each axis to the jet quads
 
@@ -100,9 +99,9 @@ static constexpr double trim_rate = 0.2 * lm::degrees, trim_limit = 6.0 * lm::de
 
 // a circular orbit 110 km up, until set_orbit() says otherwise
 lm::c_lunar_module::c_lunar_module()
-    : m_dry_mass(initial_mass - descent_propellant)
+    : m_dry_mass(initial_mass - lm::descent_propellant)
 {
-    m_descent_engine.propellant = descent_propellant;
+    m_descent_engine.propellant = lm::descent_propellant;
     const double radius = lm::moon_radius + 110.0e3;
     set_orbit({ radius, 0.0, 0.0 }, { 0.0, std::sqrt(lm::moon_mu / radius), 0.0 });
 }

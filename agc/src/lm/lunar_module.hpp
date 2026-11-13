@@ -20,6 +20,9 @@ namespace lm
     inline constexpr double moon_mu = 4.9027780e12;   // m^3/s^2
     inline constexpr double moon_radius = 1737.4e3;   // m
 
+    // the descent stage's propellant, loaded: 18184 lb
+    inline constexpr double descent_propellant = 8248.0; // kg
+
     // the pgns mode control switch
     enum class mode_control : std::uint8_t { off, attitude_hold, automatic };
 

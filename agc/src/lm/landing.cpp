@@ -143,6 +143,14 @@ lm::landing_start_t lm::plan_landing(const agc::c_computer& computer, const yul:
     return start;
 }
 
+lm::vec3_t lm::site_at(const lm::landing_start_t& start, double seconds)
+{
+    const double rate = lm::length(start.moon_rotation);
+    if (rate == 0.0)
+        return start.site;
+    return lm::frame_rotation(start.moon_rotation / rate, -rate * (seconds - start.tland)) * start.site;
+}
+
 void lm::align_for_landing(lm::c_lunar_module& lunar_module, const lm::landing_start_t& start)
 {
     lunar_module.set_attitude(start.refsmmat);
