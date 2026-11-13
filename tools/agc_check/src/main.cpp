@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "agc/computer.hpp"
+#include "lm/lunar_module.hpp"
 #include "yul/assembler.hpp"
 
 // a rope transcribed from a printed listing, Virtual AGC's .binsource format: BANK=nn lines, then the bank's words in
@@ -150,6 +151,39 @@ static void print_dsky(const agc::dsky_state_t& state, double time)
     std::println("  lights:{}", lit.empty() ? " none" : lit);
 }
 
+// a cdu counter in degrees, two's complement
+static double cdu_degrees(std::uint16_t counter)
+{
+    const int value = counter & 077777;
+    return (value >= 040000 ? value - 0100000 : value) * 360.0 / 32768.0;
+}
+
+// erasable words to show with the state, by symbol: name and linear address
+static std::vector<std::pair<std::string, int>> watched;
+
+static void print_computer(const agc::c_computer& computer, const lm::c_lunar_module& lm)
+{
+    print_dsky(computer.dsky().state(), computer.time());
+    if (!watched.empty())
+    {
+        std::string words;
+        for (const auto& [name, address] : watched)
+            words += std::format(" {} {:05o}", name, computer.erasable(address));
+        std::println("  erasable:{}", words);
+    }
+    std::println("  restarts: {}  channel 77: {:05o}{}", computer.restarts(), computer.channel(077), computer.standby() ? "  (standby)" : "");
+
+    const lm::gimbal_angles_t& gimbals = lm.imu().gimbals();
+    const lm::vec3_t& rates = lm.rates();
+    std::println("  gimbals  outer {:8.3f}  inner {:8.3f}  middle {:8.3f}{}{}", gimbals.outer / lm::degrees, gimbals.inner / lm::degrees,
+        gimbals.middle / lm::degrees, lm.imu().coarse_align() ? "  (coarse align)" : "", lm.imu().turn_on_request() ? "  (turn-on request)" : "");
+    std::println("  cdus     x     {:8.3f}  y     {:8.3f}  z      {:8.3f}", cdu_degrees(computer.erasable(agc::counter_cdux)),
+        cdu_degrees(computer.erasable(agc::counter_cduy)), cdu_degrees(computer.erasable(agc::counter_cduz)));
+    std::println("  rates    p     {:8.3f}  q     {:8.3f}  r      {:8.3f} deg/s   jets {:05o}  channels 12 {:05o} 14 {:05o} 30 {:05o} 31 {:05o}",
+        rates.x / lm::degrees, rates.y / lm::degrees, rates.z / lm::degrees, lm.jets(),
+        computer.channel(012), computer.channel(014), computer.channel(030), computer.channel(031));
+}
+
 static std::optional<agc::dsky_key> key_for(char c)
 {
     if (c >= '0' && c <= '9')
@@ -169,9 +203,12 @@ static std::optional<agc::dsky_key> key_for(char c)
     }
 }
 
-// boots the program, waits, types the keys (V35E, N for noun, E enter, P pro, R rset, C clr, K key rel, a space waits
-// a second) and shows the dsky after each step
-static int run(const std::filesystem::path& main_file, std::string_view keys, double settle)
+// boots the program in the lunar module, waits, types the keys (V35E, N for noun, E enter, P pro, R rset, C clr, K
+// key rel) and shows the dsky and the spacecraft at the end. a space waits a second, W ten seconds, M a minute, S
+// holds pro for 3 seconds (standby and back), ? shows the state there. the crew's side in lowercase: i turns the imu
+// off or on, o h a set the mode control to off, attitude hold or auto, and the hand controller is held over for a
+// second by p q (pitch up, down), y z (yaw right, left), r l (roll right, left)
+static int run(const std::filesystem::path& main_file, std::string_view keys, double settle, std::string_view watch)
 {
     const auto assembly = yul::assemble(main_file);
     if (!assembly)
@@ -181,25 +218,70 @@ static int run(const std::filesystem::path& main_file, std::string_view keys, do
         return 1;
     }
 
+    // symbols to watch, comma separated, erasable ones only
+    for (std::size_t start = 0; start < watch.size(); )
+    {
+        std::size_t end = watch.find(',', start);
+        if (end == std::string_view::npos)
+            end = watch.size();
+        const std::string name(watch.substr(start, end - start));
+        if (const auto symbol = assembly->symbols.find(name); symbol != assembly->symbols.end() && symbol->second.value < 04000)
+            watched.emplace_back(name, symbol->second.value);
+        else
+            std::println("no erasable symbol {}", name);
+        start = end + 1;
+    }
+
     agc::c_computer computer(assembly->rope);
-    computer.run(settle);
-    print_dsky(computer.dsky().state(), computer.time());
+    lm::c_lunar_module lm;
+    lm.run(computer, settle);
+    print_computer(computer, lm);
+
+    const auto stick = [&](double lm::hand_controller_t::* axis, double deflection) {
+        lm.hand_controller.*axis = deflection;
+        lm.run(computer, 1.0);
+        lm.hand_controller.*axis = 0.0;
+    };
 
     for (const char c : keys)
     {
-        if (c == ' ')
-            computer.run(1.0);
-        else if (const std::optional<agc::dsky_key> key = key_for(c))
+        switch (c)
+        {
+        case ' ': lm.run(computer, 1.0); continue;
+        case 'W': lm.run(computer, 10.0); continue;
+        case 'M': lm.run(computer, 60.0); continue;
+        case '?': print_computer(computer, lm); continue;
+        case 'i': lm.imu().operate = !lm.imu().operate; continue;
+        case 'o': lm.mode = lm::mode_control::off; continue;
+        case 'h': lm.mode = lm::mode_control::attitude_hold; continue;
+        case 'a': lm.mode = lm::mode_control::automatic; continue;
+        case 'p': stick(&lm::hand_controller_t::pitch, 1.0); continue;
+        case 'q': stick(&lm::hand_controller_t::pitch, -1.0); continue;
+        case 'y': stick(&lm::hand_controller_t::yaw, 1.0); continue;
+        case 'z': stick(&lm::hand_controller_t::yaw, -1.0); continue;
+        case 'r': stick(&lm::hand_controller_t::roll, 1.0); continue;
+        case 'l': stick(&lm::hand_controller_t::roll, -1.0); continue;
+        case 'S':
+            computer.dsky().hold_proceed(true);
+            lm.run(computer, 3.0);
+            computer.dsky().hold_proceed(false);
+            lm.run(computer, 0.3);
+            continue;
+        default:
+            break;
+        }
+
+        if (const std::optional<agc::dsky_key> key = key_for(c))
         {
             computer.dsky().press_key(*key);
-            computer.run(0.3);
+            lm.run(computer, 0.3);
         }
     }
 
     if (!keys.empty())
     {
-        computer.run(settle);
-        print_dsky(computer.dsky().state(), computer.time());
+        lm.run(computer, settle);
+        print_computer(computer, lm);
     }
     return 0;
 }
@@ -208,7 +290,7 @@ static void usage()
 {
     std::println("usage:");
     std::println("  agc_check assemble <MAIN.agc> [--compare <rope.binsource>]");
-    std::println("  agc_check run <MAIN.agc> [keys] [seconds to settle, default 3]");
+    std::println("  agc_check run <MAIN.agc> [keys] [seconds to settle, default 3] [erasable symbols to show, comma separated]");
 }
 
 int main(int argc, char** argv)
@@ -226,7 +308,7 @@ int main(int argc, char** argv)
     {
         const std::string_view keys = args.size() >= 3 ? args[2] : std::string_view();
         const double settle = args.size() >= 4 ? std::stod(std::string(args[3])) : 3.0;
-        return run(args[1], keys, settle);
+        return run(args[1], keys, settle, args.size() >= 5 ? args[4] : std::string_view());
     }
 
     usage();
