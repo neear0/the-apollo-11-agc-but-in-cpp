@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -14,7 +15,9 @@
 #include <vector>
 
 #include "agc/computer.hpp"
+#include "agc/scaled.hpp"
 #include "lm/lunar_module.hpp"
+#include "lm/landing.hpp"
 #include "lm/pad_load.hpp"
 #include "yul/assembler.hpp"
 
@@ -192,6 +195,8 @@ static void print_computer(const agc::c_computer& computer, const lm::c_lunar_mo
     std::println("  rates    p     {:8.3f}  q     {:8.3f}  r      {:8.3f} deg/s   jets {:05o}  channels 12 {:05o} 14 {:05o} 30 {:05o} 31 {:05o}",
         rates.x / lm::degrees, rates.y / lm::degrees, rates.z / lm::degrees, lm.jets(),
         computer.channel(012), computer.channel(014), computer.channel(030), computer.channel(031));
+    std::println("  radar    channels 13 {:05o} 33 {:05o}  requests {}  antenna position {}", computer.channel(013), computer.channel(033),
+        computer.radar_requests(), lm.landing_radar().antenna_position);
 }
 
 static std::optional<agc::dsky_key> key_for(char c)
@@ -227,11 +232,30 @@ struct flight_t
     lm::c_lunar_module lm;
 };
 
+// the descent orbit, lead seconds before powered descent: aligned before the imu's turn-on, the uplink after it
+static lm::landing_start_t start_landing(flight_t& flight, const yul::assembly_t& assembly, double lead)
+{
+    static constexpr double imu_turn_on = 120.0;
+    const lm::landing_start_t start = lm::plan_landing(flight.computer, assembly, lead);
+    lm::align_for_landing(flight.lm, start);
+    flight.lm.run(flight.computer, imu_turn_on);
+    lm::uplink_landing(flight.computer, flight.lm, start, assembly);
+    return start;
+}
+
+// seconds since launch as hh:mm:ss.ss
+static std::string get_text(double seconds)
+{
+    const int hours = static_cast<int>(seconds / 3600.0);
+    const int minutes = static_cast<int>((seconds - hours * 3600.0) / 60.0);
+    return std::format("{:03}:{:02}:{:05.2f}", hours, minutes, seconds - hours * 3600.0 - minutes * 60.0);
+}
+
 // types the keys into the dsky (V35E, N for noun, E enter, P pro, R rset, C clr, K key rel). a space waits a second,
 // W ten seconds, M a minute, S holds pro for 3 seconds (standby and back), ? shows the state there. the crew's side
 // in lowercase: i turns the imu off or on, e arms the descent engine or disarms it, o h a set the mode control to
 // off, attitude hold or auto, and the hand controller is held over for a second by p q (pitch up, down), y z (yaw
-// right, left), r l (roll right, left)
+// right, left), r l (roll right, left). {vvnn} waits, up to 20 minutes, for the dsky to show verb vv noun nn
 static void fly(flight_t& flight, std::string_view keys)
 {
     agc::c_computer& computer = flight.computer;
@@ -242,9 +266,28 @@ static void fly(flight_t& flight, std::string_view keys)
         lm.run(computer, 1.0);
         lm.hand_controller.*axis = 0.0;
     };
+    const auto shows = [&](std::string_view verb_noun) {
+        const agc::dsky_state_t& state = computer.dsky().state();
+        const std::array<std::int8_t, 4> digits{ state.verb[0], state.verb[1], state.noun[0], state.noun[1] };
+        for (std::size_t i = 0; i < 4; ++i)
+            if (digits[i] != verb_noun[i] - '0')
+                return false;
+        return true;
+    };
 
-    for (const char c : keys)
+    for (std::size_t at = 0; at < keys.size(); ++at)
     {
+        const char c = keys[at];
+        if (c == '{' && at + 5 < keys.size() && keys[at + 5] == '}')
+        {
+            const std::string_view verb_noun = keys.substr(at + 1, 4);
+            const double give_up = computer.time() + 1200.0;
+            while (!shows(verb_noun) && computer.time() < give_up)
+                lm.run(computer, 0.1);
+            at += 5;
+            continue;
+        }
+
         switch (c)
         {
         case ' ': lm.run(computer, 1.0); continue;
@@ -280,8 +323,9 @@ static void fly(flight_t& flight, std::string_view keys)
     }
 }
 
-// boots the program in the lunar module, waits, flies the keys and shows the dsky and the spacecraft at the end
-static int run(const std::filesystem::path& main_file, std::string_view keys, double settle, std::string_view watch)
+// boots the program in the lunar module, waits, flies the keys and shows the dsky and the spacecraft at the end. landing,
+// it starts in the descent orbit 8 minutes before powered descent
+static int run(const std::filesystem::path& main_file, std::string_view keys, double settle, std::string_view watch, bool landing)
 {
     const auto assembly = yul::assemble(main_file);
     if (!assembly)
@@ -291,7 +335,8 @@ static int run(const std::filesystem::path& main_file, std::string_view keys, do
         return 1;
     }
 
-    // symbols to watch, erasable ones only: comma separated, or semicolon separated if any has a comma (L,PVT-CG)
+    // symbols to watch, erasable ones only, NAME+n for a word after one: comma separated, or semicolon separated if
+    // any has a comma (L,PVT-CG)
     const char separator = watch.contains(';') ? ';' : ',';
     for (std::size_t start = 0; start < watch.size(); )
     {
@@ -299,14 +344,25 @@ static int run(const std::filesystem::path& main_file, std::string_view keys, do
         if (end == std::string_view::npos)
             end = watch.size();
         const std::string name(watch.substr(start, end - start));
-        if (const auto symbol = assembly->symbols.find(name); symbol != assembly->symbols.end() && symbol->second.value < 04000)
-            watched.emplace_back(name, symbol->second.value);
+        const std::size_t plus = name.rfind('+');
+        const bool offset_given = plus != std::string::npos && plus > 0 && plus + 1 < name.size() && std::isdigit(static_cast<unsigned char>(name[plus + 1]));
+        const std::string base = offset_given ? name.substr(0, plus) : name;
+        const int offset = offset_given ? std::stoi(name.substr(plus + 1)) : 0;
+        if (const auto symbol = assembly->symbols.find(base); symbol != assembly->symbols.end() && symbol->second.value + offset < 04000)
+            watched.emplace_back(name, symbol->second.value + offset);
         else
             std::println("no erasable symbol {}", name);
         start = end + 1;
     }
 
     const auto flight = std::make_unique<flight_t>(*assembly);
+    if (landing)
+    {
+        const lm::landing_start_t start = start_landing(*flight, *assembly, 480.0);
+        std::println("landing: uplink at {}, ignition planned {}, TLAND {}", get_text(start.time), get_text(start.ignition), get_text(start.tland));
+        std::println("  site  {:12.1f} {:12.1f} {:12.1f} m   lm {:12.1f} {:12.1f} {:12.1f} m  {:8.2f} {:8.2f} {:8.2f} m/s",
+            start.site.x, start.site.y, start.site.z, start.position.x, start.position.y, start.position.z, start.velocity.x, start.velocity.y, start.velocity.z);
+    }
     flight->lm.run(flight->computer, settle);
     print_computer(flight->computer, flight->lm);
 
@@ -432,6 +488,48 @@ static int test(const std::filesystem::path& root)
         check(!flight->computer.standby() && shows(*flight, 37, -1), "held pro again: back, asking for a program");
     }
 
+    std::println("Luminary099 landing, from 8 minutes before powered descent");
+    {
+        const auto flight = std::make_unique<flight_t>(*assembly);
+        const lm::landing_start_t start = start_landing(*flight, *assembly, 480.0);
+        const auto erasable = [&](std::string_view name, int words, int scale) {
+            std::array<std::uint16_t, 3> value{};
+            const int address = assembly->symbols.at(std::string(name)).value;
+            for (int i = 0; i < words; ++i)
+                value[static_cast<std::size_t>(i)] = flight->computer.erasable(address + i);
+            return agc::from_scaled(std::span(value.data(), static_cast<std::size_t>(words)), scale);
+        };
+        const double uplinked_at = flight->computer.time();
+        const auto mission_time = [&] { return start.time + flight->computer.time() - uplinked_at; };
+        const auto above_site = [&] { return lm::length(flight->lm.position()) - lm::length(start.site); };
+
+        // P63: the ignition algorithm, R60's maneuver, the landing radar's antenna checked, then ignition at TIG - 5
+        fly(*flight, "V37E63E{0661}");
+        const double tig = erasable("TIG", 2, 28) / 100.0;
+        check(std::abs(tig - start.ignition) < 2.0, std::format("P63's ignition algorithm puts TIG where the orbit was planned ({:+.1f} s)", tig - start.ignition));
+        fly(*flight, "P{5025}E{5018}P{0618}{5018}eE {9962}P");
+        flight->lm.run(flight->computer, tig + 5.0 - mission_time());
+        const lm::descent_engine_t& engine = flight->lm.descent_engine();
+        check(engine.on && std::abs(engine.thrust - 4670.0) < 100.0, "the descent engine lights at TIG, at 10%");
+        flight->lm.run(flight->computer, 30.0);
+        check(std::abs(engine.thrust - 43454.7) < 100.0, "at TIG + 26 s it throttles up to the stop (FLATOUT)");
+
+        // the braking phase, on the imu alone (no landing radar yet), to high gate where P64 takes over
+        const int modreg = assembly->symbols.at("MODREG").value;
+        double worst_trim = 0.0;
+        while (flight->computer.erasable(modreg) == 63 && mission_time() < tig + 800.0)
+        {
+            flight->lm.run(flight->computer, 1.0);
+            worst_trim = std::max({ worst_trim, std::abs(flight->lm.engine_trim().pitch), std::abs(flight->lm.engine_trim().roll) });
+        }
+        check(flight->computer.erasable(modreg) == 64, std::format("braking phase flown to P64 in {:.0f} s", mission_time() - tig));
+        check(above_site() > 1000.0 && above_site() < 3500.0 && lm::length(flight->lm.velocity()) < 300.0,
+            std::format("high gate at {:.0f} m above the site, {:.0f} m/s", above_site(), lm::length(flight->lm.velocity())));
+        check(worst_trim / lm::degrees < 1.0, std::format("the trim gimbal holds the thrust through the centre of mass (at most {:.2f} deg)", worst_trim / lm::degrees));
+        check(flight->computer.restarts() == 0 && no_new_alarms(*flight), std::format("no restarts or alarms on the way ({} restarts, alarms {:05o} {:05o})",
+            flight->computer.restarts(), flight->computer.erasable(failreg->second.value + 1), flight->computer.erasable(failreg->second.value + 2)));
+    }
+
     std::println("{}", failures == 0 ? "all passed" : std::format("{} failed", failures));
     return failures;
 }
@@ -462,6 +560,7 @@ static void usage()
     std::println("  agc_check assemble <MAIN.agc> [--compare <rope.binsource>]");
     std::println("  agc_check symbols <MAIN.agc>");
     std::println("  agc_check run <MAIN.agc> [keys] [seconds to settle, default 3] [erasable symbols to show, comma or semicolon separated]");
+    std::println("  agc_check land <MAIN.agc> [keys] [settle] [symbols]   as run, from the descent orbit 8 minutes before powered descent");
     std::println("  agc_check test [repo root, default .]");
 }
 
@@ -476,11 +575,11 @@ int main(int argc, char** argv)
         return assemble(args[1], compare_with);
     }
 
-    if (args.size() >= 2 && args[0] == "run")
+    if (args.size() >= 2 && (args[0] == "run" || args[0] == "land"))
     {
         const std::string_view keys = args.size() >= 3 ? args[2] : std::string_view();
         const double settle = args.size() >= 4 ? std::stod(std::string(args[3])) : 3.0;
-        return run(args[1], keys, settle, args.size() >= 5 ? args[4] : std::string_view());
+        return run(args[1], keys, settle, args.size() >= 5 ? args[4] : std::string_view(), args[0] == "land");
     }
 
     if (args.size() >= 2 && args[0] == "symbols")
