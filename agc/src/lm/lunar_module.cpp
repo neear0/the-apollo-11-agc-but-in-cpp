@@ -85,8 +85,10 @@ static constexpr std::uint16_t engine_armed_signal = 000004, auto_throttle_signa
 static constexpr std::uint16_t engine_on = 010000, engine_off = 020000;
 // channel 31, active low
 static constexpr std::uint16_t attitude_hold_mode = 010000, auto_mode = 020000, out_of_detent = 040000;
-// channel 33, active low: the landing radar's antenna. channel 12: the computer commands it to position 2
-static constexpr std::uint16_t lr_position_1 = 000040, lr_position_2 = 000100;
+// channel 33, active low: the landing radar's antenna, its data good, its range scale. channel 12: the computer
+// commands the antenna to position 2
+static constexpr std::uint16_t lr_range_good = 000020, lr_position_1 = 000040, lr_position_2 = 000100;
+static constexpr std::uint16_t lr_velocity_good = 000200, lr_range_low_scale = 000400;
 static constexpr std::uint16_t lr_position_2_command = 010000;
 // channel 13: a radar reading under way
 static constexpr std::uint16_t radar_activity = 000010;
@@ -277,6 +279,94 @@ void lm::c_lunar_module::drive_trim(const agc::c_computer& computer, double dt)
     drive(m_engine_trim.roll, trim_plus_roll, trim_minus_roll);
 }
 
+// the landing radar as Luminary decodes it (P20-P25.agc, SERVICER.agc, CONTROLLED_CONSTANTS.agc): the antenna turned
+// from the vehicle's axes as the stable member is from them by gimbal angles, outer LRALPHA and inner LRBETA (the pad
+// load's, position 1 and 2); the range beam HBEAMANT in the antenna's axes; range 1.079 ft a count on low scale, 5
+// times that on high (SCALADJ doubles it twice and adds it back: DASAMPL); velocity along the antenna's x, y and z (z = x cross
+// y) at -0.644, 1.212 and 0.8668 ft/s a count, offset by 12288 (LVELBIAS)
+static constexpr std::array<lm::gimbal_angles_t, 2> antenna_angles = { {
+    { 0.0163371759 * lm::two_pi, 0.0665287037 * lm::two_pi, 0.0 },   // outer (x), inner (y), middle (z)
+    { 0.0161680555 * lm::two_pi, 0.0001361111 * lm::two_pi, 0.0 },
+} };
+static constexpr lm::vec3_t range_beam{ -0.9374036082, 0.0, -0.3482448542 };
+static constexpr double range_count = 1.079 * 0.3048;                     // m, low scale
+static constexpr double low_scale_below = 2481.7 * 0.3048;                // m, HISCALIM
+static constexpr std::array<double, 3> velocity_count = { -0.644 * 0.3048, 1.212 * 0.3048, 0.8668 * 0.3048 }; // m/s
+static constexpr int velocity_bias = 12288;
+// where it locks on: a guess, about where Apollo 11's did (39000 ft), with the beam no more than 70 degrees off the
+// vertical
+static constexpr double lock_range = 12000.0;                             // m
+static const double lock_angle = std::cos(70.0 * lm::degrees);
+
+void lm::c_lunar_module::run_radar(agc::c_computer& computer, double dt)
+{
+    landing_radar_t& radar = m_landing_radar;
+
+    // the antenna: swinging to position 2 while commanded, and staying there
+    static constexpr double antenna_swing = 8.0;
+    if (radar.antenna_position == 1 && (computer.channel(012) & lr_position_2_command))
+    {
+        radar.antenna_travel += dt;
+        if (radar.antenna_travel >= antenna_swing)
+            radar.antenna_position = 2;
+    }
+
+    // the beams: the range beam's slant range to the surface sphere, the velocity over the turning surface in the
+    // antenna's axes
+    const lm::mat3_t antenna_to_body = lm::gimbal_matrix(antenna_angles[static_cast<std::size_t>(radar.antenna_position - 1)]);
+    const lm::mat3_t body_to_reference = m_attitude.transposed();
+    const lm::vec3_t beam = body_to_reference * (antenna_to_body * range_beam);
+    const double along = lm::dot(m_position, beam);
+    const double discriminant = along * along - (lm::dot(m_position, m_position) - surface_radius * surface_radius);
+    const double range = discriminant >= 0.0 ? -along - std::sqrt(discriminant) : -1.0;
+    const lm::vec3_t down = m_position / -lm::length(m_position);
+    const bool locked = range > 0.0 && range < lock_range && lm::dot(beam, down) > lock_angle;
+    radar.range_good = radar.velocity_good = locked;
+    radar.slant_range = locked ? range : 0.0;
+    radar.low_scale = locked && range < low_scale_below;
+    const lm::vec3_t over_surface = m_velocity - lm::cross(moon_rotation, m_position);
+    radar.velocity = antenna_to_body.transposed() * (m_attitude * over_surface);
+
+    computer.set_input(033, lr_position_1 | lr_position_2 | lr_range_good | lr_velocity_good | lr_range_low_scale,
+        (radar.antenna_position == 1 ? lr_position_2 : lr_position_1) | (radar.range_good ? 0 : lr_range_good) |
+        (radar.velocity_good ? 0 : lr_velocity_good) | (radar.low_scale ? 0 : lr_range_low_scale));
+
+    // its readings: one wanted starts (over again, if one was under way), the activity bit dropped abandons it, and
+    // it's answered once it's taken its time. the rendezvous radar's (select bit 3 clear) aren't, there's none
+    static constexpr double reading_time = 0.080;
+    if (radar.answered != computer.radar_requests())
+    {
+        radar.answered = computer.radar_requests();
+        radar.reading = (computer.radar_select() & 4) ? 0.0 : -1.0;
+    }
+    else if (!(computer.channel(013) & radar_activity))
+        radar.reading = -1.0;
+    if (radar.reading >= 0.0)
+    {
+        radar.reading += dt;
+        if (radar.reading >= reading_time)
+        {
+            radar.reading = -1.0;
+            computer.radar_reading(radar_value(computer.radar_select() & 3));
+        }
+    }
+}
+
+// what goes into RNRAD, an unsigned 15 bits: for select 0-2 the velocity along the antenna's x, y, z, for 3 the range
+std::uint16_t lm::c_lunar_module::radar_value(int select) const
+{
+    const landing_radar_t& radar = m_landing_radar;
+    double counts = 0.0;
+    if (select == 3)
+        counts = radar.slant_range / (radar.low_scale ? range_count : 5.0 * range_count);
+    else
+    {
+        const std::array<double, 3> along{ radar.velocity.x, radar.velocity.y, radar.velocity.z };
+        counts = along[static_cast<std::size_t>(select)] / velocity_count[static_cast<std::size_t>(select)] + velocity_bias;
+    }
+    return static_cast<std::uint16_t>(std::clamp(std::lround(counts), 0l, 077777l));
+}
+
 // a counter's value from -1 to 1 of the hand controller's travel, 42 counts at full deflection, in ones' complement
 static int hand_controller_counts(double deflection)
 {
@@ -299,36 +389,7 @@ void lm::c_lunar_module::set_switches(agc::c_computer& computer, double dt)
         channel31 &= static_cast<std::uint16_t>(~out_of_detent);
     computer.set_input(031, attitude_hold_mode | auto_mode | out_of_detent, channel31);
 
-    // the landing radar's antenna: swinging to position 2 while commanded, and staying there
-    static constexpr double antenna_swing = 8.0;
-    landing_radar_t& radar = m_landing_radar;
-    if (radar.antenna_position == 1 && (computer.channel(012) & lr_position_2_command))
-    {
-        radar.antenna_travel += dt;
-        if (radar.antenna_travel >= antenna_swing)
-            radar.antenna_position = 2;
-    }
-    computer.set_input(033, lr_position_1 | lr_position_2, radar.antenna_position == 1 ? lr_position_2 : lr_position_1);
-
-    // its readings: one wanted starts (over again, if one was under way), the activity bit dropped abandons it, and
-    // it's answered once it's taken its time. the rendezvous radar's (select bit 3 clear) aren't, there's none
-    static constexpr double reading_time = 0.080;
-    if (radar.answered != computer.radar_requests())
-    {
-        radar.answered = computer.radar_requests();
-        radar.reading = (computer.radar_select() & 4) ? 0.0 : -1.0;
-    }
-    else if (!(computer.channel(013) & radar_activity))
-        radar.reading = -1.0;
-    if (radar.reading >= 0.0)
-    {
-        radar.reading += dt;
-        if (radar.reading >= reading_time)
-        {
-            radar.reading = -1.0;
-            computer.radar_reading(0);
-        }
-    }
+    run_radar(computer, dt);
 
     // read into the counters while the autopilot has them enabled
     const std::uint16_t channel13 = computer.channel(013);

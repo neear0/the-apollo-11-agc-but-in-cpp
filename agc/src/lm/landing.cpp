@@ -19,6 +19,9 @@ static constexpr double f_0 = 5.20932947829, f_rate = 2.67240410e-6;          //
 static constexpr double b_0 = 0.40916190299, b_rate = -7.19757301e-14;        // BSUBO, BDOT
 static constexpr double inclination = 5521.5 / 3600.0 * lm::degrees;          // 1 degree 32.1 minutes
 
+// how fast the moon turns, as the landing guidance has it (OMEGMOON, 2.66169947 E-8 rad/cs)
+static constexpr double moon_rate = 2.66169947e-6;                            // rad/s
+
 // from the ignition algorithm (THE_LUNAR_LANDING.agc): the guidance starts its descent this long before TLAND
 static constexpr double guidance_duration = 664.400314;                       // GUIDDURN, s
 
@@ -118,6 +121,7 @@ lm::landing_start_t lm::plan_landing(const agc::c_computer& computer, const yul:
     // (the orbit eastward, its pole the moon's north turned square to x), y = z cross x
     const lm::vec3_t up = start.site / lm::length(start.site);
     const lm::vec3_t north = lm::moon_fixed_to_reference({ 0.0, 0.0, 1.0 }, tland + tephem, {});
+    start.moon_rotation = north * moon_rate;
     const lm::vec3_t pole = north - up * lm::dot(north, up);
     const lm::vec3_t h = pole / lm::length(pole);
     const lm::vec3_t downrange = lm::cross(h, up);
@@ -182,4 +186,6 @@ void lm::uplink_landing(agc::c_computer& computer, lm::c_lunar_module& lunar_mod
     set_flag(computer, erasable_address(assembly, "FLAGWRD0"), 004000);  // MOONFLAG, bit 12
 
     lunar_module.set_orbit(start.position, start.velocity);
+    lunar_module.surface_radius = lm::length(start.site);
+    lunar_module.moon_rotation = start.moon_rotation;
 }

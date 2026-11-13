@@ -50,17 +50,23 @@ namespace lm
         bool on = false;
     };
 
-    // the landing radar's antenna: position 1 for the braking phase, as the crew leaves it, until the computer commands
-    // position 2 (channel 12 bit 13, at P64) and it swings over, about 8 s (LRPOS2 starts looking for it after 7),
-    // and stays
-    // a reading takes 80 ms (INITREAD's sample midpoints are 4 cs apart): the computer asks (channel 13), the radar
-    // answers into RNRAD with RADARUPT. no lock on the surface yet: no data, its data good bits (channel 33) off
+    // the landing radar. its antenna: position 1 for the braking phase, as the crew leaves it, until the computer
+    // commands position 2 (channel 12 bit 13, at P64) and it swings over, about 8 s (LRPOS2 starts looking for it
+    // after 7), and stays. its beams: the range beam's slant range to the surface, and the vehicle's velocity over the
+    // surface along the antenna's three axes, once it has a lock. a reading takes 80 ms (INITREAD's sample midpoints
+    // are 4 cs apart): the computer asks (channel 13), the radar answers into RNRAD with RADARUPT
     struct landing_radar_t
     {
         int antenna_position = 1;
         double antenna_travel = 0.0; // s, swinging to position 2
         int answered = 0;            // the computer's requests answered
         double reading = -1.0;       // s into the one under way, -1 for none
+
+        bool range_good = false;     // locked on, channel 33's data good bits
+        bool velocity_good = false;
+        bool low_scale = false;      // the range below about 2500 ft, counted finer
+        double slant_range = 0.0;    // m, along the range beam
+        vec3_t velocity;             // m/s over the surface, along the antenna's x, y and z
     };
 
     class c_lunar_module
@@ -78,6 +84,10 @@ namespace lm
         hand_controller_t hand_controller;
         bool engine_armed = false;                       // the engine arm switch on descent
         bool auto_throttle = true;                       // the throttle on the computer, not the crew's
+
+        // the moon under it, as the landing radar sees it: a sphere through the landing site, turning
+        double surface_radius = lm::moon_radius;         // m
+        vec3_t moon_rotation;                            // its angular velocity, reference coordinates, rad/s
 
         // where it is, moon-centred and inertial, the axes the computer's (its basic reference coordinates)
         void set_orbit(const vec3_t& position, const vec3_t& velocity);
@@ -98,6 +108,8 @@ namespace lm
 
     private:
         void set_switches(agc::c_computer& computer, double dt);
+        void run_radar(agc::c_computer& computer, double dt);
+        std::uint16_t radar_value(int select) const;
         void drive_trim(const agc::c_computer& computer, double dt);
         void run_engine(agc::c_computer& computer, double dt);
 

@@ -33,6 +33,7 @@ namespace lm
         vec3_t velocity;        // m/s
         mat3_t refsmmat;        // the landing site alignment: reference to stable member
         vec3_t site;            // the landing site at TLAND, reference coordinates, m
+        vec3_t moon_rotation;   // the moon's angular velocity (OMEGMOON about its pole), rad/s
         double tland = 0.0;     // s
         double ignition = 0.0;  // s, where the plan puts it: TLAND - GUIDDURN - ZOOMTIME
     };
