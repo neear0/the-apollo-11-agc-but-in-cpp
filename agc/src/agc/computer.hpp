@@ -50,6 +50,7 @@ namespace agc
         void set_input(int channel, std::uint16_t mask, std::uint16_t bits); // bits of an input channel, 30-33 are active low
         std::array<int, 3> take_gyro_pulses();                     // gyro torquing since the last call, signed, x y z
         std::array<int, 3> take_cdu_drive_pulses();                // imu coarse align drive since the last call, signed, x y z
+        int take_thrust_pulses();                                  // descent engine throttle commands since the last call, signed
 
         // the ground's side: a word of erasable memory loaded through the test connector, as the pad loads were
         void load_erasable(int address, std::uint16_t value);      // a linear erasable address, 0-3777
@@ -131,6 +132,7 @@ namespace agc
 
         std::array<int, 3> m_gyro_pulses{};
         std::array<int, 3> m_cdu_drive_pulses{};
+        int m_thrust_pulses = 0;
 
         c_dsky m_dsky;
     };

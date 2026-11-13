@@ -356,6 +356,11 @@ std::array<int, 3> agc::c_computer::take_cdu_drive_pulses()
     return std::exchange(m_cdu_drive_pulses, {});
 }
 
+int agc::c_computer::take_thrust_pulses()
+{
+    return std::exchange(m_thrust_pulses, 0);
+}
+
 void agc::c_computer::service_inputs()
 {
     // a key on the keypad: its code into channel 15 and KEYRUPT1. pro is a button held down, channel 32 bit 14 low
@@ -531,16 +536,25 @@ int agc::c_computer::alarm_checks(int scaler)
     return alarms;
 }
 
-// the counters the computer counts out of: GYROCMD to the gyro channel 14 selects at 3200 pulses a second, and
-// CDUXCMD-CDUZCMD to the imu's coarse align at 800 a second, while channel 14 says so. each pulse takes a cycle
+// the counters the computer counts out of: GYROCMD to the gyro channel 14 selects at 3200 pulses a second,
+// CDUXCMD-CDUZCMD to the imu's coarse align at 800 a second, and THRUST to the descent engine's throttle at 3200 a
+// second (32 a centisecond, FRATE in THROTTLE_CONTROL_ROUTINES), while channel 14 says so. each pulse takes a cycle
 int agc::c_computer::output_counters(int scaler)
 {
-    static constexpr int gyrocmd = 047, cduxcmd = 050;
+    static constexpr int gyrocmd = 047, cduxcmd = 050, thrust = 055;
     static constexpr int channel_14 = 014;
     int mcts = 0;
 
     std::array<std::uint16_t, 0400>& registers = m_erasable[0];
     const int channel14 = m_channels[channel_14];
+    if (channel14 & 000010)
+    {
+        std::uint16_t& counter = registers[thrust];
+        const bool negative = (counter & 040000) != 0;
+        if (!counter_dinc(counter))
+            m_thrust_pulses += negative ? -1 : 1;
+        ++mcts;
+    }
     if (channel14 & 001000)
     {
         std::uint16_t& counter = registers[gyrocmd];
