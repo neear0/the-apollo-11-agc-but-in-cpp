@@ -107,17 +107,24 @@ lm::c_lunar_module::c_lunar_module()
     set_orbit({ radius, 0.0, 0.0 }, { 0.0, std::sqrt(lm::moon_mu / radius), 0.0 });
 }
 
+// the vehicle moves on to wherever the computer's clock has got to. that includes the memory cycles the counters
+// took (each pulse the pipas, cdus and the rest send it steals one, as in the hardware), which pass while the vehicle
+// is being stepped: left out, its time fell behind the computer's, 0.4% under full thrust, and the computer's
+// navigation ran 2.5 km ahead of it by touchdown
 void lm::c_lunar_module::run(agc::c_computer& computer, double seconds)
 {
     static constexpr double slice = 0.001;
+    if (m_simulated_until < 0.0)
+        m_simulated_until = computer.time();
     const double end = computer.time() + seconds;
     while (computer.time() < end)
     {
-        const double start = computer.time();
-        computer.run_until(std::min(end, start + slice));
-        if (computer.time() <= start)
+        computer.run_until(std::min(end, computer.time() + slice));
+        const double now = computer.time();
+        if (now <= m_simulated_until)
             break; // less than a memory cycle left
-        step(computer, computer.time() - start);
+        step(computer, now - m_simulated_until);
+        m_simulated_until = now;
     }
 }
 

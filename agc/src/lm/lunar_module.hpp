@@ -123,5 +123,6 @@ namespace lm
         engine_trim_t m_engine_trim;
         descent_engine_t m_descent_engine;
         landing_radar_t m_landing_radar;
+        double m_simulated_until = -1.0;                 // the computer's time the vehicle has been moved on to
     };
 }
