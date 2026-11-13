@@ -72,7 +72,7 @@ headless: `agc_check land Luminary099/MAIN.agc "V37E63E{0661}P{5025}E{5018}P{061
 
 the moon is a smooth sphere through the landing site (no terrain, no craters for the landing radar), and a point mass, where the computer's lunar gravity isn't (its navigation is some 40 m off by ignition from that). the gear just stops the vehicle, it doesn't bounce or tip. the ascent engine, the rendezvous radar, the aot, uplink
 
-the pad load is apollo 11's, from the grumman lm data book (`agc/src/lm/pad_load.cpp` says which table and what's left out). the computer powers on with erasable cleared, so the first fresh start is alarm 1107 (PROG lit), as on a real cold start. the state vectors, the landing site alignment and the clock are put where the ground's uplinks and the crew's alignment put them (`agc/src/lm/landing.cpp`)
+the pad load is apollo 11's, from the grumman lm data book (`agc/src/lm/pad_load.cpp` says which table and what's left out). the computer powers on with erasable cleared, so the first fresh start is alarm 1107 (PROG lit), as on a real cold start. the state vectors, the landing site alignment, the clock and the landing time are put where the ground's uplinks and the crew's alignment put them (`agc/src/lm/landing.cpp`). the landing time is moved so ignition comes at 102:33:05, as flown: the prelaunch pad load's would put it two hours early, at 100:39
 
 comanche 055, the command module's program, assembles word for word but doesn't run: there's no command module
 

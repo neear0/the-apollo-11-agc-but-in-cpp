@@ -25,6 +25,11 @@ static constexpr double moon_rate = 2.66169947e-6;                            //
 // from the ignition algorithm (THE_LUNAR_LANDING.agc): the guidance starts its descent this long before TLAND
 static constexpr double guidance_duration = 664.400314;                       // GUIDDURN, s
 
+// powered descent's ignition as flown, 102:33:05.01 (the mission report). the prelaunch pad load's TLAND, 100:50:49.20,
+// would put it at 100:39:19: the ground's uplinks moved TLAND before the descent, since the ignition algorithm works
+// ignition out from it. the value they sent isn't known here, so TLAND is put where it gives the flown ignition
+static constexpr double flown_ignition = 102.0 * 3600.0 + 33.0 * 60.0 + 5.01; // s since launch
+
 lm::mat3_t lm::moon_matrix(double seconds)
 {
     const double b = b_0 + b_rate * seconds, f = f_0 + f_rate * seconds, node = node_0 + node_rate * seconds;
@@ -104,7 +109,6 @@ static void propagate(lm::vec3_t& position, lm::vec3_t& velocity, double seconds
 lm::landing_start_t lm::plan_landing(const agc::c_computer& computer, const yul::assembly_t& assembly, double lead)
 {
     // the pad load, as the computer has it
-    const double tland = read_scaled(computer, erasable_address(assembly, "TLAND"), 2, 28) / 100.0;
     const double tephem = read_scaled(computer, erasable_address(assembly, "TEPHEM"), 3, 42) / 100.0;
     const lm::vec3_t rls = read_vector(computer, erasable_address(assembly, "RLS"), 27);
     const lm::vec3_t libration = read_vector(computer, erasable_address(assembly, "504LM"), 0);
@@ -112,6 +116,7 @@ lm::landing_start_t lm::plan_landing(const agc::c_computer& computer, const yul:
     const double rignz = read_scaled(computer, erasable_address(assembly, "RIGNZ"), 2, 24);
     const double vign = read_scaled(computer, erasable_address(assembly, "VIGN"), 2, 10) * 100.0;
     const double zoomtime = read_scaled(computer, erasable_address(assembly, "ZOOMTIME"), 1, 14) / 100.0;
+    const double tland = flown_ignition + zoomtime + guidance_duration;
 
     landing_start_t start;
     start.tland = tland;
@@ -187,6 +192,9 @@ void lm::uplink_landing(agc::c_computer& computer, lm::c_lunar_module& lunar_mod
     const int refsmmat = erasable_address(assembly, "REFSMMAT");
     for (int row = 0; row < 3; ++row)
         write_vector(computer, refsmmat + 6 * row, start.refsmmat.rows[static_cast<std::size_t>(row)], 1);
+
+    // the landing time, moved as the ground moved it (2 words, cs at 2^28)
+    write_scaled(computer, erasable_address(assembly, "TLAND"), start.tland * 100.0, 28, 2);
 
     // REFSMMAT good, and both state vectors (and the integration) in the moon's sphere
     set_flag(computer, erasable_address(assembly, "FLAGWRD3"), 010000);  // REFSMFLG, bit 13
