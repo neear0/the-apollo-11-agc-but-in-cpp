@@ -1,0 +1,9 @@
+<Project>
+  <!-- imported by every project in the repo, after its own settings: release builds link the c++ runtime in, so the
+       release's exes run without the visual c++ redistributable -->
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+    <ClCompile>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+    </ClCompile>
+  </ItemDefinitionGroup>
+</Project>
